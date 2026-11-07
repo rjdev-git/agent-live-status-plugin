@@ -1,8 +1,16 @@
 # opencode-subagent-model
 
+[![License: MIT](https://img.shields.io/github/license/chatteridiot-git/agent-live-status-plugin.svg?style=flat-square)](https://github.com/chatteridiot-git/agent-live-status-plugin/blob/main/LICENSE)
+
 Live model status for running subagents in the OpenCode TUI.
 
 This plugin shows which model each active subagent is using, so you can quickly understand what is running without opening each session individually.
+
+It is especially useful when you use different models for your main agent and subagents and want to confirm that each subagent is using the intended model from its configuration.
+
+## Live preview
+
+<img src="./opencode.png" alt="OpenCode plugin showing live subagent model status" width="70%" />
 
 ## Why use it
 
