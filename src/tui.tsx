@@ -1,13 +1,16 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
+import type { ResolvedTheme } from "@opencode/theme/tui"
 import type { JSX } from "@opentui/solid"
-import { Show, createMemo, createSignal } from "solid-js"
+import { For, Show, createMemo, createSignal } from "solid-js"
 import {
+  BAR_CELLS,
+  MAX_ROWS,
   collect,
   elapsed,
   filterRows,
+  layout,
   matches,
-  summary,
   truncate,
   type RunningSubagent,
   type Sources,
@@ -35,9 +38,12 @@ type Options = {
   placement: Placement
   compact?: boolean
   bind?: string
+  width: number
 }
 
 type SlotInput = { sessionID?: string }
+
+const DEFAULT_WIDTH = 35
 
 function readOptions(context: Context): Options {
   const raw = context.options ?? {}
@@ -49,6 +55,7 @@ function readOptions(context: Context): Options {
     placement,
     compact: typeof raw.compact === "boolean" ? raw.compact : undefined,
     bind: typeof raw.bind === "string" ? raw.bind : undefined,
+    width: typeof raw.width === "number" && raw.width > 0 ? raw.width : DEFAULT_WIDTH,
   }
 }
 
@@ -63,37 +70,66 @@ function sources(context: Context): Sources {
   }
 }
 
+/** Box colour: unknown muted, 70+ red, 50+ yellow, else green. */
+function barColor(theme: ResolvedTheme, pct: number | undefined) {
+  if (pct === undefined) return theme.text.muted
+  if (pct >= 70) return theme.text.feedback.error.base
+  if (pct >= 50) return theme.text.feedback.warning.base
+  return theme.text.feedback.success.base
+}
+
+/** Inline coloured text inside a single `<text>` block. */
+function Seg(props: { fg: ReturnType<typeof barColor>; children: string }) {
+  return <span style={{ fg: props.fg } as never}>{props.children}</span>
+}
+
 function Status(props: {
   context: Context
   sessionID?: string
   tick: () => number
   compact: () => boolean
+  width: () => number
 }) {
   const rows = createMemo(() => {
     props.tick()
     return collect(sources(props.context), props.sessionID)
   })
 
-  const label = createMemo(() => {
-    const list = rows()
-    if (list.length === 0) return ""
-    if (props.compact()) return `sub ${list.length}`
-    return summary(list)
-  })
-
-  const age = createMemo(() => {
-    const list = rows()
-    return list.length === 1 ? elapsed(list[0].since) : ""
-  })
+  const view = createMemo(() => layout(rows(), props.width(), MAX_ROWS))
 
   return (
     <Show when={rows().length > 0}>
-      <box flexDirection="row" gap={1}>
-        <text fg={props.context.theme.text.feedback.success.base}>{label()}</text>
-        <Show when={age()}>
-          <text fg={props.context.theme.text.muted}>{age()}</text>
-        </Show>
-      </box>
+      <Show
+        when={!props.compact()}
+        fallback={
+          <text fg={props.context.theme.text.feedback.success.base}>{`sub ${rows().length}`}</text>
+        }
+      >
+        <text wrapMode="none">
+          <span style={{ fg: props.context.theme.text.base } as never}>Sub Agents</span>
+          <br />
+          <For each={view().rows}>
+            {(row, index) => (
+              <>
+                <Show when={index() > 0}>
+                  <br />
+                </Show>
+                <Seg fg={props.context.theme.text.feedback.success.base}>{row.head}</Seg>
+                <Seg fg={barColor(props.context.theme, row.pct)}>
+                  {"▮".repeat(row.filled)}
+                </Seg>
+                <Seg fg={props.context.theme.text.muted}>
+                  {"▯".repeat(BAR_CELLS - row.filled)}
+                </Seg>
+              </>
+            )}
+          </For>
+          <Show when={view().more > 0}>
+            <br />
+            <span style={{ fg: props.context.theme.text.muted } as never}>{`+${view().more} more · /subagents`}</span>
+          </Show>
+        </text>
+      </Show>
     </Show>
   )
 }
@@ -173,7 +209,13 @@ export default Plugin.define({
     const stops = WATCHED_EVENTS.map((type) => context.data.on(type, bump))
 
     const removeSlot = claim(context, options.placement, (input) => (
-      <Status context={context} sessionID={input.sessionID} tick={tick} compact={compact} />
+      <Status
+        context={context}
+        sessionID={input.sessionID}
+        tick={tick}
+        compact={compact}
+        width={() => options.width}
+      />
     ))
 
     context.keymap.layer(() => ({

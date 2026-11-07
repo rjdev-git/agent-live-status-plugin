@@ -13,21 +13,42 @@ This plugin shows which model each active subagent is using, so you can quickly 
 
 ## Example output
 
-Single subagent:
+One row per running subagent, oldest first, with a five-box context indicator:
 
 ```text
-sub explore · OpenAI/GPT-4o · 42s
+Sub Agents
+ 1.explore   Go/Kimi K3.1 Pro ▮▮▮▯▯
+ 2.general   Go/MiniMax M3.1… ▮▯▯▯▯
+ 3.code      Go/GPT-6 Luna    ▮▮▮▮▯
+ 4.review    Go/Grok 4.7      ▮▮▯▯▯
 ```
 
-Multiple subagents:
+The `Sub Agents` title and the rows render only while at least one subagent is
+running; with none running the slot stays empty.
+
+Numbers are reserved for two digits, so `10.` lines up with ` 1.` and the rows
+never reflow. Past twenty rows they collapse into one overflow line:
 
 ```text
-sub 3 · explore x2, general · OpenAI/GPT-4o x2, Anthropic/Claude Sonnet 4
++1 more · /subagents
+```
+
+The model label is capped at 20 cells (16 at the default `width: 35`), and clips
+with `…` past that. Boxes show how full the model context window is:
+`filled = round(pct × 5 / 100)`. The row text is green. Boxes are green below
+50%, yellow from 50%, red from 70%. A subagent with no usage data yet shows
+empty muted boxes.
+
+Compact mode keeps the old summary:
+
+```text
+sub 3
 ```
 
 ## Features
 
 - Live status summary in the session UI (`sidebar.content` by default)
+- Numbered per-subagent rows with a model and a context-window indicator
 - `/subagents` command and `/subagent-models` alias
 - Palette command: `Show running subagent models`
 - Palette command: `Toggle compact subagent status`
@@ -46,6 +67,10 @@ It resolves the model in this order:
 4. `unknown model`
 
 The displayed label follows the format `ProviderName/ModelName`, and appends ` (variant)` when relevant. If a label is missing, the plugin falls back to the provider or model ID.
+
+The sidebar rows use the short form: the provider's last word (`OpenCode Go` → `Go`) and no variant.
+
+The context indicator reads the newest message that reports token usage and divides its prompt size (`input + cache read`) by the model's context limit. Cumulative session tokens are not used: they never fall after compaction, so the bar would never recover.
 
 ## Commands
 
@@ -86,7 +111,8 @@ Add the plugin in `opencode.jsonc`:
       "options": {
         "placement": "sidebar.content",
         "bind": "ctrl+shift+s",
-        "compact": false
+        "compact": false,
+        "width": 35
       }
     }
   ]
@@ -100,6 +126,7 @@ Add the plugin in `opencode.jsonc`:
 | `placement` | `"sidebar.content"` \| `"sidebar.footer"` \| `"prompt.footer"` | `"sidebar.content"` | Where the live status is rendered |
 | `bind` | `string` | unset | Keybind for the subagent picker |
 | `compact` | `boolean` | unset | Forces compact mode (`sub N`) |
+| `width` | `number` | `35` | Cell budget for a sidebar row; the model label clips to fit |
 
 ## Installation
 

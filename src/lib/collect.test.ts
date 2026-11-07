@@ -3,19 +3,26 @@ import test from "node:test"
 import {
   cleanTitle,
   collect,
+  contextPct,
   elapsed,
   filterRows,
   labeler,
+  layout,
   matches,
   resolveModel,
   summary,
   truncate,
+  type RunningSubagent,
   type SessionInfo,
   type SessionSource,
   type Sources,
 } from "./collect.ts"
 
-function fakeSessions(sessions: SessionInfo[], running: string[] = []): SessionSource {
+function fakeSessions(
+  sessions: SessionInfo[],
+  running: string[] = [],
+  messages: Record<string, Array<{ tokens?: { input: number; cache?: { read?: number } } }>> = {},
+): SessionSource {
   const byID = new Map(sessions.map((session) => [session.id, session]))
   return {
     list: () => sessions,
@@ -31,6 +38,7 @@ function fakeSessions(sessions: SessionInfo[], running: string[] = []): SessionS
       return current?.id ?? id
     },
     status: (id) => (running.includes(id) ? "running" : "idle"),
+    message: { list: (id) => messages[id] ?? [] },
   }
 }
 
@@ -51,6 +59,118 @@ test("labeler formats provider/model and appends the variant", () => {
 test("labeler falls back to raw ids", () => {
   const label = labeler([], [])
   assert.equal(label({ id: "mystery", providerID: "unknown-provider" }), "unknown-provider/mystery")
+})
+
+test("short labeler keeps the provider's last word and drops the variant", () => {
+  const label = labeler(
+    [{ id: "kimi", modelID: "kimi", providerID: "go", name: "Kimi K3.1 Pro" }],
+    [{ id: "go", name: "OpenCode Go" }],
+    true,
+  )
+  assert.equal(label({ id: "kimi", providerID: "go", variant: "high" }), "Go/Kimi K3.1 Pro")
+})
+
+test("contextPct uses the newest usage over the model context limit", () => {
+  const sources: Sources = {
+    sessions: fakeSessions(
+      [{ id: "child", parentID: "root", model: { id: "deepseek-flash", providerID: "deepseek" } }],
+      ["child"],
+      { child: [{ tokens: { input: 10 } }, { tokens: { input: 100_000, cache: { read: 28_000 } } }] },
+    ),
+    models: [{ ...models[0], limit: { context: 256_000 } }],
+    providers,
+  }
+  const row = collect(sources)[0]
+  assert.equal(Math.round(row.pct!), 50)
+  assert.equal(row.modelShort, "DeepSeek/DeepSeek Flash")
+  assert.equal(contextPct(sources.sessions.list()[0], sources), 50)
+})
+
+test("contextPct is unknown without a usage or a model limit", () => {
+  const base = { id: "child", model: { id: "deepseek-flash", providerID: "deepseek" } }
+  const noLimit: Sources = {
+    sessions: fakeSessions([base], [], { child: [{ tokens: { input: 1_000 } }] }),
+    models,
+  }
+  assert.equal(contextPct(noLimit.sessions.list()[0], noLimit), undefined)
+
+  const noUsage: Sources = {
+    sessions: fakeSessions([base]),
+    models: [{ ...models[0], limit: { context: 256_000 } }],
+  }
+  assert.equal(contextPct(noUsage.sessions.list()[0], noUsage), undefined)
+})
+
+test("contextPct never exceeds 100", () => {
+  const sources: Sources = {
+    sessions: fakeSessions(
+      [{ id: "child", model: { id: "deepseek-flash", providerID: "deepseek" } }],
+      [],
+      { child: [{ tokens: { input: 300_000 } }] },
+    ),
+    models: [{ ...models[0], limit: { context: 256_000 } }],
+  }
+  assert.equal(contextPct(sources.sessions.list()[0], sources), 100)
+})
+
+test("layout numbers rows oldest first and pads the columns", () => {
+  const rows: RunningSubagent[] = [
+    {
+      sessionID: "b",
+      agent: "general",
+      model: "OpenCode Go/MiniMax M3.1 Flash (high)",
+      modelShort: "Go/MiniMax M3.1 Flash",
+      title: "t",
+      since: 2,
+      pct: 12,
+    },
+    {
+      sessionID: "a",
+      agent: "explore",
+      model: "OpenCode Go/Kimi K3.1 Pro (high)",
+      modelShort: "Go/Kimi K3.1 Pro",
+      title: "t",
+      since: 1,
+      pct: 62,
+    },
+  ]
+
+  const result = layout(rows, 40, 9)
+  assert.equal(result.rows[0].head, " 1.explore   Go/Kimi K3.1 Pro     ")
+  assert.equal(result.rows[0].filled, 3)
+  assert.equal(result.rows[1].head, " 2.general   Go/MiniMax M3.1 Fla… ")
+  assert.equal(result.rows[1].filled, 1)
+  assert.equal(result.rows[0].head.length + 5, 39)
+  assert.equal(result.more, 0)
+})
+
+test("layout clips the model budget and counts rows past the cap", () => {
+  const rows = Array.from({ length: 11 }, (_, index) => ({
+    sessionID: `s${index}`,
+    agent: "a-very-long-agent-name",
+    model: "OpenCode Go/An Extremely Long Model Name",
+    modelShort: "Go/An Extremely Long Model Name",
+    title: "t",
+    since: index,
+    pct: 100,
+  }))
+
+  const result = layout(rows, 40, 9)
+  assert.equal(result.rows.length, 9)
+  assert.equal(result.more, 2)
+  assert.equal(result.rows[0].head, " 1.a-very-l… Go/An Extremely Lon… ")
+  assert.equal(result.rows[0].filled, 5)
+  assert.equal(result.rows[0].head.length + 5, 39)
+})
+
+test("layout leaves the boxes empty when the percentage is unknown", () => {
+  const result = layout(
+    [{ sessionID: "a", agent: "explore", model: "Go/Kimi", modelShort: "Go/Kimi", title: "t" }],
+    40,
+    9,
+  )
+  assert.equal(result.rows[0].filled, 0)
+  assert.equal(result.rows[0].pct, undefined)
 })
 
 test("resolveModel prefers the session model", () => {

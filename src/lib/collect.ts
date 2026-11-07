@@ -16,6 +16,13 @@ export type ModelInfo = {
   modelID: string
   providerID: string
   name: string
+  limit?: { context: number }
+}
+
+/** The part of a message's usage that fills the context window. */
+export type TokenUsage = {
+  input: number
+  cache?: { read?: number }
 }
 
 export type ProviderInfo = {
@@ -42,6 +49,7 @@ export type SessionSource = {
   get(sessionID: string): SessionInfo | undefined
   root(sessionID: string): string
   status(sessionID: string): "idle" | "running"
+  message?: { list(sessionID: string): ReadonlyArray<unknown> }
 }
 
 export type Sources = {
@@ -57,13 +65,24 @@ export type RunningSubagent = {
   model: string
   title: string
   since?: number
+  /** Short `Provider/Model` label used by the sidebar rows. */
+  modelShort?: string
+  /** Context window used, 0-100. Unknown when the usage or limit is missing. */
+  pct?: number
 }
 
 export const UNKNOWN_MODEL = "unknown model"
 export const UNKNOWN_AGENT = "subagent"
 
-/** Builds `ProviderName/ModelName (variant)`, falling back to raw IDs. */
-export function labeler(models: ModelInfo[] = [], providers: ProviderInfo[] = []) {
+/**
+ * Builds `ProviderName/ModelName (variant)`, falling back to raw IDs.
+ * `short` uses the provider's last word and drops the variant.
+ */
+export function labeler(
+  models: ModelInfo[] = [],
+  providers: ProviderInfo[] = [],
+  short = false,
+) {
   const byModel = new Map<string, string>()
   for (const entry of models) {
     byModel.set(`${entry.providerID}:${entry.modelID}`, entry.name)
@@ -74,24 +93,22 @@ export function labeler(models: ModelInfo[] = [], providers: ProviderInfo[] = []
   return (model: ModelRef) => {
     const name = byModel.get(`${model.providerID}:${model.id}`) ?? model.id
     const provider = byProvider.get(model.providerID) ?? model.providerID
-    return `${provider}/${name}${model.variant ? ` (${model.variant})` : ""}`
+    const shown = short ? (provider.split(/\s+/).filter(Boolean).at(-1) ?? provider) : provider
+    const variant = !short && model.variant ? ` (${model.variant})` : ""
+    return `${shown}/${name}${variant}`
   }
 }
 
 /**
  * Session model, else the subagent's configured model, else the nearest
- * ancestor session model, else `unknown model`.
+ * ancestor session model.
  */
-export function resolveModel(
-  session: SessionInfo,
-  sources: Sources,
-  label = labeler(sources.models, sources.providers),
-): string {
-  if (session.model) return label(session.model)
+export function modelRef(session: SessionInfo, sources: Sources): ModelRef | undefined {
+  if (session.model) return session.model
 
   if (session.agent) {
     const agent = sources.agents?.find((entry) => entry.id === session.agent)
-    if (agent?.model) return label(agent.model)
+    if (agent?.model) return agent.model
   }
 
   const seen = new Set([session.id])
@@ -100,11 +117,53 @@ export function resolveModel(
     seen.add(parentID)
     const parent = sources.sessions.get(parentID)
     if (!parent) break
-    if (parent.model) return label(parent.model)
+    if (parent.model) return parent.model
     parentID = parent.parentID
   }
 
-  return UNKNOWN_MODEL
+  return undefined
+}
+
+export function resolveModel(
+  session: SessionInfo,
+  sources: Sources,
+  label = labeler(sources.models, sources.providers),
+): string {
+  const ref = modelRef(session, sources)
+  return ref ? label(ref) : UNKNOWN_MODEL
+}
+
+/** Context window size for the model a session resolves to. */
+function contextLimit(ref: ModelRef | undefined, models: ModelInfo[] = []): number | undefined {
+  if (!ref) return undefined
+  const model = models.find(
+    (entry) => entry.providerID === ref.providerID && (entry.modelID === ref.id || entry.id === ref.id),
+  )
+  return model?.limit?.context
+}
+
+/** Usage of the newest message that reports tokens; older ones predate it. */
+function lastUsage(sources: Sources, sessionID: string): TokenUsage | undefined {
+  const list = sources.sessions.message?.list(sessionID) ?? []
+  for (let index = list.length - 1; index >= 0; index--) {
+    const usage = (list[index] as { tokens?: TokenUsage } | undefined)?.tokens
+    if (usage) return usage
+  }
+  return undefined
+}
+
+/**
+ * Context window used, 0-100, from the newest message's prompt size over the
+ * model limit. Cumulative session tokens are wrong here: they never fall
+ * after compaction.
+ */
+export function contextPct(session: SessionInfo, sources: Sources): number | undefined {
+  const limit = contextLimit(modelRef(session, sources), sources.models)
+  const usage = lastUsage(sources, session.id)
+  if (!limit || !usage) return undefined
+  const used = usage.input + (usage.cache?.read ?? 0)
+  if (!Number.isFinite(used) || used < 0) return undefined
+  return Math.min(100, (used / limit) * 100)
 }
 
 /** Collapses newlines and repeated spaces so titles stay on one line. */
@@ -115,6 +174,7 @@ export function cleanTitle(value: string): string {
 /** Running child sessions in the same family as `sessionID`. */
 export function collect(sources: Sources, sessionID?: string): RunningSubagent[] {
   const label = labeler(sources.models, sources.providers)
+  const shortLabel = labeler(sources.models, sources.providers, true)
   const scope = sessionID ? sources.sessions.root(sessionID) : undefined
 
   const roots = new Map<string, string>()
@@ -131,10 +191,13 @@ export function collect(sources: Sources, sessionID?: string): RunningSubagent[]
     if (!session.parentID) continue
     if (scope && rootOf(session.id) !== scope) continue
     if (sources.sessions.status(session.id) !== "running") continue
+    const ref = modelRef(session, sources)
     rows.push({
       sessionID: session.id,
       agent: session.agent ?? UNKNOWN_AGENT,
-      model: resolveModel(session, sources, label),
+      model: ref ? label(ref) : UNKNOWN_MODEL,
+      modelShort: ref ? shortLabel(ref) : UNKNOWN_MODEL,
+      pct: contextPct(session, sources),
       title: cleanTitle(session.title ?? session.id),
       since: session.time?.created,
     })
@@ -170,6 +233,54 @@ export function summary(rows: RunningSubagent[]): string {
 }
 
 /** `42s`, `3m`, `1h 2m`. Empty when the start time is unknown. */
+/** Sidebar row budget. Numbers are reserved for two digits, so rows stay aligned. */
+export const MAX_ROWS = 20
+
+/** Width of the context indicator, in boxes. */
+export const BAR_CELLS = 5
+
+/** Agent names are clipped to this many cells so the model column aligns. */
+export const AGENT_CELLS = 9
+
+/** Everything in a row except the model label: number, agent, spaces, boxes. */
+const ROW_FIXED_CELLS = 19
+
+export type RowLayout = {
+  /** Number, agent, model, and the gap before the boxes. */
+  head: string
+  /** Filled boxes, 0-5. */
+  filled: number
+  /** Context used, 0-100. Unknown when the session reports no usage. */
+  pct?: number
+}
+
+/** Hard cap on the model label, so a wide sidebar does not stretch it. */
+const MAX_MODEL_CELLS = 20
+
+/**
+ * Numbered sidebar rows plus the count of rows past the cap. Oldest first, so
+ * a new subagent appends at the bottom and numbering stays stable.
+ */
+export function layout(rows: RunningSubagent[], width = 35, max = MAX_ROWS) {
+  const budget = Math.max(4, Math.min(MAX_MODEL_CELLS, width - ROW_FIXED_CELLS))
+  const ordered = [...rows].sort((left, right) => (left.since ?? Infinity) - (right.since ?? Infinity))
+  const shown = ordered.slice(0, max)
+
+  return {
+    rows: shown.map((row, index): RowLayout => {
+      const agent = truncate(row.agent, AGENT_CELLS).padEnd(AGENT_CELLS)
+      const model = truncate(row.modelShort ?? row.model, budget).padEnd(budget)
+      const filled =
+        row.pct === undefined
+          ? 0
+          : Math.min(BAR_CELLS, Math.max(0, Math.round((row.pct * BAR_CELLS) / 100)))
+      const number = String(index + 1).padStart(2)
+      return { head: `${number}.${agent} ${model} `, filled, pct: row.pct }
+    }),
+    more: Math.max(0, ordered.length - shown.length),
+  }
+}
+
 export function elapsed(since: number | undefined, now = Date.now()): string {
   if (!since) return ""
   const seconds = Math.max(0, Math.round((now - since) / 1000))
