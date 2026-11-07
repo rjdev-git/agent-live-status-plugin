@@ -258,6 +258,24 @@ export type RowLayout = {
 const MAX_MODEL_CELLS = 20
 
 /**
+ * Fits `Provider/Model` into `budget` cells. When it overflows, the provider
+ * may take at most half; the rest goes to the model name, so a long provider
+ * cannot eat the model.
+ */
+export function fitModel(label: string, budget: number): string {
+  if (label.length <= budget) return label
+  const slash = label.indexOf("/")
+  if (slash < 0) return truncate(label, budget)
+
+  const provider = label.slice(0, slash)
+  const model = label.slice(slash + 1)
+  const providerCells = Math.max(1, Math.floor(budget / 2) - 1)
+  const shownProvider = truncate(provider, providerCells)
+  const modelCells = Math.max(1, budget - shownProvider.length - 1)
+  return `${shownProvider}/${truncate(model, modelCells)}`
+}
+
+/**
  * Numbered sidebar rows plus the count of rows past the cap. Oldest first, so
  * a new subagent appends at the bottom and numbering stays stable.
  */
@@ -269,7 +287,7 @@ export function layout(rows: RunningSubagent[], width = 35, max = MAX_ROWS) {
   return {
     rows: shown.map((row, index): RowLayout => {
       const agent = truncate(row.agent, AGENT_CELLS).padEnd(AGENT_CELLS)
-      const model = truncate(row.modelShort ?? row.model, budget).padEnd(budget)
+      const model = fitModel(row.modelShort ?? row.model, budget).padEnd(budget)
       const filled =
         row.pct === undefined
           ? 0

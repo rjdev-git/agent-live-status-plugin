@@ -5,6 +5,7 @@ import {
   collect,
   contextPct,
   elapsed,
+  fitModel,
   filterRows,
   labeler,
   layout,
@@ -262,6 +263,14 @@ test("summary groups repeated models and distinct agents", () => {
     { sessionID: "c", agent: "general", model: "OpenAI/GPT", title: "t" },
   ]
   assert.equal(summary(rows), "sub 3 · explore x2, general · DeepSeek/Flash x2, OpenAI/GPT")
+})
+
+test("fitModel gives the provider half at most and the model the rest", () => {
+  assert.equal(fitModel("Go/Kimi K3.1 Pro", 16), "Go/Kimi K3.1 Pro")
+  assert.equal(fitModel("Go/MiniMax M3.1 Flash", 16), "Go/MiniMax M3.1…")
+  assert.equal(fitModel("SomeVeryBigName/Model", 16), "SomeVe…/Model")
+  assert.equal(fitModel("SomeVeryBigName/SomeVeryLongModelNameRight", 16), "SomeVe…/SomeVer…")
+  assert.equal(fitModel("NoSlashModelNameLongerThanBudget", 16), "NoSlashModelNam…")
 })
 
 test("elapsed buckets seconds, minutes, and hours", () => {
