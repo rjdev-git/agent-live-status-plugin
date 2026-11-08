@@ -8,6 +8,10 @@ This plugin shows which model each active subagent is using, so you can quickly 
 
 It is especially useful when you use different models for your main agent and subagents and want to confirm that each subagent is using the intended model from its configuration.
 
+Current version: `0.6.0`
+
+This release ships five-step token/sec bands (5/10/20/50/100) for the speed bar, `▓`/`░` glyphs, and one separator cell between the model field and the bar.
+
 ## Live preview
 
 <img src="./opencode.png" alt="OpenCode plugin showing live subagent model status" width="70%" />
