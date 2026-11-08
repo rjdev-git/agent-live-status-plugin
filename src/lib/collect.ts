@@ -282,7 +282,7 @@ export const FILL_MIN_BOXES = 0
 export const FILL_MAX_BOXES = 5
 
 /** Band floors in tokens/sec, ascending; a band's 1-based position is its box count. */
-export const FILL_BANDS: ReadonlyArray<number> = [5, 10, 20, 50, 100]
+export const FILL_BANDS: ReadonlyArray<number> = [5, 20, 50, 70, 100]
 
 /** Grace window for a failed or interrupted instance row, in milliseconds. */
 export const GRACE_MS = 30_000
@@ -457,10 +457,12 @@ type Section = {
 /** Speed tone: filled boxes are success green, empty boxes are muted (C21). */
 export type BarTone = "success" | "muted"
 
-/** Boxes filled by `tps`: the bands it reaches, clamped (C19). */
+/** Boxes filled by `tps`: inclusive lower floors plus the exclusive top floor, clamped (C19). */
 export function barFill(tps: number | undefined): number {
   if (tps === undefined || !Number.isFinite(tps)) return FILL_MIN_BOXES
-  const filled = FILL_BANDS.filter((band) => tps >= band).length
+  const top = FILL_BANDS[FILL_BANDS.length - 1]
+  const reached = FILL_BANDS.slice(0, FILL_BANDS.length - 1).filter((band) => tps >= band).length
+  const filled = reached + (tps > top ? 1 : 0)
   return Math.min(FILL_MAX_BOXES, Math.max(FILL_MIN_BOXES, filled))
 }
 

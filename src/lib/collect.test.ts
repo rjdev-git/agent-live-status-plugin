@@ -784,29 +784,43 @@ test("C16 FILL_MIN_BOXES = 0 clamps the lower edge", () => {
 test("C17 FILL_MAX_BOXES = 5 clamps the upper edge", () => {
   assert.equal(FILL_MAX_BOXES, 5)
   assert.equal(barFill(1000), 5)
-  assert.equal(barFill(99.99), 4)
+  // Exclusive top floor: 100 exactly stays in the 4-box band.
+  assert.equal(barFill(100), 4)
 })
 
-test("C18 FILL_BANDS = [5, 10, 20, 50, 100] fills one box at its lowest floor", () => {
-  assert.deepEqual(FILL_BANDS, [5, 10, 20, 50, 100])
-  assert.equal(barFill(5), 1)
+test("C18 FILL_BANDS = [5, 20, 50, 70, 100] fills one box at its lowest floor", () => {
+  assert.deepEqual(FILL_BANDS, [5, 20, 50, 70, 100])
   assert.equal(barFill(4.99), 0)
+  assert.equal(barFill(5), 1)
+  assert.equal(barFill(20), 2)
+  assert.equal(barFill(50), 3)
+  assert.equal(barFill(70), 4)
+  assert.equal(barFill(100), 4)
+  assert.equal(barFill(100.01), 5)
 })
 
 test("C19 the fill formula counts the bands reached and clamps", () => {
+  // Each inclusive floor reached exactly.
   assert.equal(barFill(5), 1)
-  assert.equal(barFill(10), 2)
-  assert.equal(barFill(20), 3)
-  assert.equal(barFill(50), 4)
-  assert.equal(barFill(100), 5)
+  assert.equal(barFill(20), 2)
+  assert.equal(barFill(50), 3)
+  assert.equal(barFill(70), 4)
+  // One hair below each inclusive floor keeps the previous band.
   assert.equal(barFill(4.99), 0)
-  assert.equal(barFill(9.99), 1)
-  assert.equal(barFill(19.99), 2)
-  assert.equal(barFill(49.99), 3)
-  assert.equal(barFill(99.99), 4)
+  assert.equal(barFill(19.99), 1)
+  assert.equal(barFill(49.99), 2)
+  assert.equal(barFill(69.99), 3)
+  // Exclusive top floor: strictly greater is required for the fifth box.
+  assert.equal(barFill(100), 4)
+  assert.equal(barFill(100.01), 5)
+  assert.equal(barFill(1000), 5)
+  // In-band values for the 5-19.9, 20-49.9 and 50-69.9 bands.
+  assert.equal(barFill(19.9), 1)
+  assert.equal(barFill(49.9), 2)
+  assert.equal(barFill(69.9), 3)
   // Live sanity points from the R6 diagnostic (D1).
   assert.equal(barFill(5.59), 1)
-  assert.equal(barFill(14.04), 2)
+  assert.equal(barFill(14.04), 1)
   assert.equal(barFill(undefined), 0)
 })
 
@@ -1016,11 +1030,11 @@ test("role row carries the busiest active instance tps and fill (G13)", () => {
 
   const view = panel(sources, "root", 35, BODY_MAX_LINES, NOW)
   assert.equal(view.rows[0].tps, 60)
-  assert.equal(view.rows[0].filled, 4)
+  assert.equal(view.rows[0].filled, 3)
   assert.equal(view.rows[1].tps, 20)
-  assert.equal(view.rows[1].filled, 3)
+  assert.equal(view.rows[1].filled, 2)
   assert.equal(view.rows[2].tps, 60)
-  assert.equal(view.rows[2].filled, 4)
+  assert.equal(view.rows[2].filled, 3)
 })
 
 test("role row keeps the known tps when the other instance is unknown (G13)", () => {
@@ -1037,11 +1051,11 @@ test("role row keeps the known tps when the other instance is unknown (G13)", ()
 
   const view = panel(sources, "root", 35, BODY_MAX_LINES, NOW)
   assert.equal(view.rows[0].tps, 40)
-  assert.equal(view.rows[0].filled, 3)
+  assert.equal(view.rows[0].filled, 2)
   assert.equal(view.rows[1].tps, undefined)
   assert.equal(view.rows[1].filled, 0)
   assert.equal(view.rows[2].tps, 40)
-  assert.equal(view.rows[2].filled, 3)
+  assert.equal(view.rows[2].filled, 2)
 })
 
 test("F18 a grace instance and its role show empty boxes", () => {
@@ -1224,7 +1238,7 @@ test("speed bar follows the separator at width 35 (filled = 3)", () => {
         { id: "i", parentID: "root", agent: "explore", title: "x", time: { created: NOW } },
       ],
       ["i"],
-      { i: [assistant(30, 0, 1_000)] },
+      { i: [assistant(50, 0, 1_000)] },
     ),
     agents: [agent("explore", "explore", { model: { id: "kimi", providerID: "go" } })],
     models: [{ id: "kimi", modelID: "kimi", providerID: "go", name: "Kimi K3.1 Pro" }],

@@ -193,14 +193,18 @@ text shrinks below 12 to keep the row exactly `width` (F1).
 
 ## R6 — Speed bar
 
-- Fill is banded (human decision A.6): 5 boxes at 100 tokens/sec or more,
-  4 at 50, 3 at 20, 2 at 10, 1 at 5, none below. The bands compress the
-  range so slow flash models and fast agents both read visibly.
-- The floors are one ordered constant, `FILL_BANDS = [5, 10, 20, 50, 100]`
-  tokens/sec, ascending; a band's box count is its 1-based position, so
-  `filled = clamp(#{b ∈ FILL_BANDS : tps >= b}, FILL_MIN_BOXES,
-  FILL_MAX_BOXES)` (C18, C19). `TPS_PER_BOX = 20` (A.3) is superseded and
-  deleted.
+- Fill is banded (human decisions A.6 and A.7): 5 boxes above 100 tokens/sec
+  (strictly greater, so 100.0 exactly stays in the 4-box band), 4 at 70–100,
+  3 at 50–69.9, 2 at 20–49.9, 1 at 5–19.9, none below 5. The bands compress
+  the range so slow flash models and fast agents both read visibly.
+- The floors are one ordered constant,
+  `FILL_BANDS = [5, 20, 50, 70, 100]` tokens/sec, ascending. Floors 1–4 are
+  inclusive: each is reached when `tps >= floor`. Floor 5 is exclusive: the
+  fifth box is added only when `tps > floor`. So
+  `filled = clamp(#{b ∈ FILL_BANDS[0..3] : tps >= b} +
+  (tps > FILL_BANDS[4] ? 1 : 0), FILL_MIN_BOXES, FILL_MAX_BOXES)` (C18, C19).
+  Only comparisons touch `tps`: no threshold is rounded and `tps` is never
+  rounded. `TPS_PER_BOX = 20` (A.3) is superseded and deleted.
 - All filled boxes use the theme's success green. No warning ramp: speed has
   no pressure semantics. Unknown speed renders empty muted boxes.
 - Speed = output tokens produced divided by the wall time producing them,
@@ -237,13 +241,15 @@ Design decisions:
 - **Window.** Cumulative over every counted message since the session started
   (no reset, no rolling window): the pure layer keeps no per-instance state,
   and the cumulative streaming rate is stable to read.
-- **Bands, not rounding.** `filled` counts the `FILL_BANDS` floors the speed
-  reaches, then clamps to `FILL_MIN_BOXES`–`FILL_MAX_BOXES` (C19). No step
-  rounds: `tps` keeps the exact value `speedTps` returns (C20) and only its
-  comparison with each floor decides a box, so `4.99 → 0`, `5 → 1`,
-  `99.99 → 4`, `100 → 5`. A `tps` exactly on a floor takes that band.
-  Unknown speed keeps `filled = 0` with five muted boxes (the "Unknown"
-  bullet above).
+- **Bands, not rounding.** `filled` counts the inclusive floors the speed
+  reaches and adds the fifth box only strictly above the exclusive top floor,
+  then clamps to `FILL_MIN_BOXES`–`FILL_MAX_BOXES` (C19). No step rounds: `tps`
+  keeps the exact value `speedTps` returns (C20) and only its comparison with
+  each floor decides a box, so `4.99 → 0`, `5 → 1`, `19.99 → 1`, `20 → 2`,
+  `49.99 → 2`, `50 → 3`, `69.99 → 3`, `70 → 4`, `100 → 4`, `100.01 → 5`. A
+  `tps` exactly on an inclusive floor (5, 20, 50, 70) takes that band; exactly
+  on the exclusive top floor (100) stays in the 4-box band. Unknown speed
+  keeps `filled = 0` with five muted boxes (the "Unknown" bullet above).
 - **Role row.** Role `tps` = the maximum `tps` among its **active** instances
   with known speed; its `filled` is computed from that value by the same
   formula. A role with no known speed, an idle role, and a grace-only role
@@ -636,9 +642,9 @@ asserts only width or "contains" does not satisfy R12.
 | C14 | `INSTANCE_FIXED_CELLS` | 18 | all row cells except the model column (3+8+1+1+5) | width 35 → model column 17 = 12 text + 5 padding | width 18 → effective width raised to 19, model column 1 (F1) | R5 |
 | C15 | separator cell, tight glyphs | `ROLE_BAR_GAP_CELLS` = `INSTANCE_BAR_GAP_CELLS` = 1; 0 between box glyphs | the model column ends one cell before the boxes | width 35 role: `"Go/Grok 4.7"` (11 cells) leaves 5 pad cells in the 16-cell column, then the separator, so head `" 1.explore   Go/Grok 4.7      "` (30 cells) ends with 6 spaces; `"Go/Kimi K3.1 Pro"` (16 cells) fills the column and the separator is the 30th cell (`" 1.explore   Go/Kimi K3.1 Pro "`). Width 35 instance: `"Go/Kimi K3.1"` (12 cells) + 5 pad + 1 separator | width 35 role: `"Go/Grok 4.7 Flash"` (17 cells) → split `"Go/Grok 4.7 Fla…"` (16) and head `" 1.explore   Go/Grok 4.7 Fla… "` (30); the A.3 no-separator column of 17 keeps the label whole (`" 1.explore   Go/Grok 4.7 Flash"`, 30) and fails; a model field that eats the separator renders a 29-cell head (`" 1.explore   Go/Grok 4.7     "`) and fails the 6-space pin. Instance twin at 12 vs 13: `"Go/Grok 4.7.1"` (13) → `"Go/Grok 4.7…"` (12) and head `" ├ Inspect… Go/Grok 4.7…      "`; the 13-cell text under A.3 renders `" ├ Inspect… Go/Grok 4.7.1     "` | R5, R6 |
 | C16 | `FILL_MIN_BOXES` | 0 | lower fill clamp | `tps = 0` → `filled = 0` (no band reached) | `tps = 4.99` → `filled = 0` (below the lowest floor) | R6 |
-| C17 | `FILL_MAX_BOXES` | 5 | upper fill clamp | `tps = 1000` → `filled = 5` (top band; the count cannot exceed the five bands, so the clamp is a guard) | `tps = 99.99` → `filled = 4` (top band not reached, clamp not binding) | R6 |
-| C18 | `FILL_BANDS` | `[5, 10, 20, 50, 100]` tokens/sec, ascending | band floors; 1-based position = boxes filled | `tps = 5` → `filled = 1` (lowest floor reached exactly) | `tps = 4.99` → `filled = 0` (below the lowest floor) | R6 |
-| C19 | fill formula | `clamp(#{b ∈ FILL_BANDS : tps >= b}, FILL_MIN_BOXES, FILL_MAX_BOXES)` | boxes filled | `5 → 1`, `10 → 2`, `20 → 3`, `50 → 4`, `100 → 5` (each floor reached exactly); live sanity points `5.59 → 1`, `14.04 → 2` | `4.99 → 0`, `9.99 → 1`, `19.99 → 2`, `49.99 → 3`, `99.99 → 4` (one hair below each floor) | R6 |
+| C17 | `FILL_MAX_BOXES` | 5 | upper fill clamp | `tps = 1000` → `filled = 5` (top band; the count cannot exceed the five bands, so the clamp is a guard) | `tps = 100` → `filled = 4` (exclusive top floor; clamp not binding) | R6 |
+| C18 | `FILL_BANDS` | `[5, 20, 50, 70, 100]` tokens/sec, ascending | band floors; floors 1–4 inclusive (`tps >= floor`), floor 5 exclusive (`tps > floor`) | `tps = 5` → `filled = 1`, `20` → `2`, `50` → `3`, `70` → `4` (each inclusive floor reached exactly); `100.01` → `5` (strictly above the top floor) | `tps = 4.99` → `0` (below the lowest floor); `19.99` → `1`, `49.99` → `2`, `69.99` → `3` (one hair below each inclusive floor); `100` → `4` (exactly the exclusive top floor) | R6 |
+| C19 | fill formula | `clamp(#{b ∈ FILL_BANDS[0..3] : tps >= b} + (tps > FILL_BANDS[4] ? 1 : 0), FILL_MIN_BOXES, FILL_MAX_BOXES)` | boxes filled | `5 → 1`, `20 → 2`, `50 → 3`, `70 → 4`, `100.01 → 5` (each floor boundary from below); live sanity points `5.59 → 1`, `14.04 → 1` | `4.99 → 0`, `19.99 → 1`, `49.99 → 2`, `69.99 → 3`, `100 → 4` (the first four one hair below their floor; `100` is the exclusive top floor itself) | R6 |
 | C20 | tps formula | `1000 × Σ tokens.output / Σ (time.completed − time.streamed)` over counted assistant messages | tokens per second | one assistant message, `output 200`, `streamed 1000`, `completed 2000` → `tps = 200`; two messages `100` over 1000 ms and `100` over 3000 ms → `50` (the average of the two per-message rates would give `66.67`) | same message without `time.completed`, or without `tokens`, or with `completed === streamed` → `undefined` → 0 boxes | R6 |
 | C21 | `barTone` | `filled > 0` → `"success"`, else `"muted"` | box colour class | `tps 5` → 1 box → `"success"`; `tps 300` → 5 boxes → `"success"` | `tps 4.99` → 0 boxes → `"muted"`; `tps 1000` (5 boxes) → never `"error"`; no `filled` value returns `"warning"` or `"error"` | R6 |
 | C22 | `GRACE_MS` | 30 000 | grace window | `now − ended = 29 999` → grace row | `now − ended = 30 000` → folded | R4 |
@@ -654,14 +660,15 @@ asserts only width or "contains" does not satisfy R12.
 
 C19's `5.59` and `14.04` are the two real speeds observed in the live R6
 diagnostic (D1); which session they came from does not matter. They are sanity
-points, not boundaries: `5.59` clears the `5` floor, and `14.04` clears `10`
-while staying below `20`. The boundaries themselves are pinned by the exact
-floor values and the one-hair-below values in the row.
+points, not boundaries: `5.59` clears the `5` floor, and `14.04` clears `5`
+while staying below `20` (A.7). The boundaries themselves are pinned by the
+exact floor values and the one-hair-below values in the row.
 
 One constant, one meaning, checked at the places the numbers collide:
 
-- `FILL_BANDS` is the only fill table: it owns the band floors, and a band's
-  1-based position is that band's box count. `FILL_MIN_BOXES` and
+- `FILL_BANDS` is the only fill table: it owns the band floors. Floors 1–4 are
+  inclusive and each maps to boxes 1–4; floor 5 is exclusive and adds box 5
+  only when `tps` is strictly above it (A.7). `FILL_MIN_BOXES` and
   `FILL_MAX_BOXES` survive as the clamps and own only the fill range. The `5`
   in `FILL_MAX_BOXES` coincides with `BAR_CELLS` and with `FILL_BANDS.length`
   by construction only: three fields, three constants, none derived from
@@ -799,8 +806,9 @@ Additional exact-value fixtures that carry no number:
   3 indent + 8 title + 1 gap + 17 model column + 1 separator; the 11-cell
   label leaves 6 pad cells in the 17-cell column, so the run after `4.7` is
   6 pad + 1 separator = 7 spaces).
-- Speed bar glyphs at width 35, `filled = 3` (C19: `tps` from `20` up to below
-  `50`): the role row
+- Speed bar glyphs at width 35, `filled = 3` (C19: `tps` from `50` up to below
+  `70`; the floors read `5 → 1`, `20 → 2`, `50 → 3`, `70 → 4`, `100 → 4`,
+  `100.01 → 5`): the role row
   `" 1.explore   Go/Kimi K3.1 Pro "` (30 cells) renders followed by `"▓▓▓░░"`,
   so the row is 35 cells; the bar follows the separator cell that ends the
   head, and no space sits inside the bar. `filled = 0` renders `"░░░░░"`;
@@ -909,14 +917,15 @@ not a gap: it registers a temporary diagnostic, with no contract number.
   and the role aggregation (`:628-634`) pass `pct`. Required: a pure
   `speedTps(messages)` that keeps only counted assistant messages (§R6
   filter), returns `1000 × Σ tokens.output / Σ (completed − streamed)` or
-  `undefined`; `barFill(tps)` = `clamp(#{b ∈ FILL_BANDS : tps >= b},
-  FILL_MIN_BOXES, FILL_MAX_BOXES)`; `barTone(filled)` =
-  `filled > 0 ? "success" : "muted"`.
+  `undefined`; `barFill(tps)` = `clamp(#{b ∈ FILL_BANDS[0..3] : tps >= b} +
+  (tps > FILL_BANDS[4] ? 1 : 0), FILL_MIN_BOXES, FILL_MAX_BOXES)`;
+  `barTone(filled)` = `filled > 0 ? "success" : "muted"`.
   `contextLimit`, `contextPct`, `lastUsage`, `PERCENT`, `WARNING_MIN_PCT`,
   `ERROR_MIN_PCT`, `BAR_MIN_FILL`, `row.pct`, `RunningSubagent.pct` and
   `TPS_PER_BOX` are deleted.
-  Constants move (A.6): `TPS_PER_BOX` is replaced by the ordered
-  `FILL_BANDS = [5, 10, 20, 50, 100]`; `FILL_MIN_BOXES` / `FILL_MAX_BOXES`
+  Constants move (A.6, values at A.7): `TPS_PER_BOX` is replaced by the ordered
+  `FILL_BANDS = [5, 20, 50, 70, 100]` (floors 1–4 inclusive, floor 5
+  exclusive); `FILL_MIN_BOXES` / `FILL_MAX_BOXES`
   stay as the clamps, and `barFill` keeps the
   `(tps: number | undefined) => number` signature, so its call sites
   (`src/tui.tsx:152`, `src/lib/collect.ts:607`, `:627`) already pass `tps`
@@ -1061,15 +1070,16 @@ an answer.
   five-box bar at absurd speeds). Arbitration must confirm the field, or
   accept the one-term fallback `start = time.created`, which needs no other
   design change. No field is invented and no wall clock is substituted.
-- **F20 (R6 rounding) — obsolete at A.6.** Human decision A.6 replaces the
-  half-up rounding with bands, so no fill step rounds at all: `filled` counts
-  the `FILL_BANDS` floors the speed reaches (C18, C19), and `tps` itself is
-  never rounded (C20). `TPS_PER_BOX = 20` (A.3) is superseded and deleted.
-  The half-up fixtures `19 → 1`, `29 → 1`, `30 → 2`, `50 → 3`, `89 → 4`,
-  `90 → 5` and the `9 → 0` does-not-fit value are retired with the formula;
-  the boundaries now sit at `5 / 10 / 20 / 50 / 100`, each with its
-  one-hair-below value pinned in C19. No answer needed; recorded so the code
-  change is traceable.
+- **F20 (R6 rounding) — obsolete at A.6; band values moved at A.7.** Human
+  decision A.6 replaces the half-up rounding with bands, so no fill step rounds
+  at all: `filled` counts the `FILL_BANDS` floors the speed reaches (C18, C19),
+  and `tps` itself is never rounded (C20). `TPS_PER_BOX = 20` (A.3) is
+  superseded and deleted. The half-up fixtures `19 → 1`, `29 → 1`, `30 → 2`,
+  `50 → 3`, `89 → 4`, `90 → 5` and the `9 → 0` does-not-fit value are retired
+  with the formula; the boundaries now sit at `5 / 20 / 50 / 70 / 100`, each
+  with its one-hair-below value pinned in C19, and the top boundary is
+  exclusive (A.7): `100 → 4`, `100.01 → 5`. No answer needed; recorded so the
+  code change is traceable.
 - **F21 (R5 instance model text above width 35).** R5 gives the role model a
   width-dependent field (`width - 19, capped at 20`) but the instance model a
   fixed `12` plus "padding to align". The design reads that literally: the
@@ -1122,15 +1132,29 @@ an answer.
   cells and `head` stays `W − 5`; the width-35 example strings, the C8 width
   ladder, the C13 split fixture (budget 12), the C26 budget (15) and the C27
   columns (12 at width 30, 11 at width 29) moved with it.
-- **A.6 band amendment.** Fill is banded, not rounded: `FILL_BANDS =
-  [5, 10, 20, 50, 100]` tokens/sec are the floors, and a band's 1-based
-  position is its box count (C18), so `barFill(tps)` counts the floors the
-  speed reaches and clamps to `FILL_MIN_BOXES`–`FILL_MAX_BOXES` (C19).
+- **A.6 band amendment.** Fill is banded, not rounded: the ordered
+  `FILL_BANDS` floors (C18) give `barFill(tps)` as the count of floors the
+  speed reaches, clamped to `FILL_MIN_BOXES`–`FILL_MAX_BOXES` (C19).
   `TPS_PER_BOX = 20` and the half-up formula (A.3) are deleted; `tps` is
   never rounded and C20 is untouched. Moved with it: R6's restatement and
   bands bullet, C16–C19 and C21's one-box fixture (`tps 5`, was `tps 10`),
-  the `filled = 3` glyph fixture (`tps` 20 up to below 50), G17's formula and
-  constants list, and F20 (now obsolete at A.6). No §1 column, no glyph, no
-  width, and no §2 source row changed: `barFill(tps)` keeps its signature and
-  its call sites (`src/tui.tsx:152`, `src/lib/collect.ts:607`, `:627`)
-  already pass `tps`.
+  the `filled = 3` glyph fixture, G17's formula and constants list, and F20
+  (now obsolete at A.6). A.7 later moved the floors to
+  `[5, 20, 50, 70, 100]` and made the top floor exclusive; the live values are
+  stated only in A.7. No §1 column, no glyph, no width, and no §2 source row
+  changed: `barFill(tps)` keeps its signature and its call sites
+  (`src/tui.tsx:152`, `src/lib/collect.ts:607`, `:627`) already pass `tps`.
+- **A.7 band amendment.** Human decision at the R6 requirement level: the top
+  band becomes strict and the lower floors move. `FILL_BANDS =
+  [5, 20, 50, 70, 100]` tokens/sec; floors 1–4 are inclusive (`tps >= floor`,
+  boxes 1–4) and floor 5 is exclusive (`tps > 100`, box 5), so `tps = 100`
+  exactly fills 4 boxes and `100.01` fills 5 (C18). The fill formula is
+  `clamp(#{b ∈ FILL_BANDS[0..3] : tps >= b} + (tps > FILL_BANDS[4] ? 1 : 0),
+  FILL_MIN_BOXES, FILL_MAX_BOXES)` (C19); only comparisons touch `tps`, so
+  there is no rounding and no floating-point fudge at 100. Moved with it: R6's
+  restatement and bands bullet, C17's upper fixture (`100 → 4`), C18 and C19
+  (all five boundaries with fits / does-not-fit values), the C19 sanity point
+  `14.04` (now 1), the §1 `filled = 3` glyph fixture (`tps` 50 up to below
+  70), G17's formula and constants list, and F20's boundary list. No column,
+  glyph, width, tone, separator, or §2 source row changed; `BAR_CELLS`,
+  `FILL_MIN_BOXES` and `FILL_MAX_BOXES` are untouched.

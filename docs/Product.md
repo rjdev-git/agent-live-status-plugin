@@ -81,9 +81,11 @@ last 5 columns, aligned across rows.
 
 The 5 boxes show the instance's live output speed, not context usage.
 
-- Fill is banded (human decision A.6): 5 boxes at 100 tokens/sec or more,
-  4 at 50, 3 at 20, 2 at 10, 1 at 5, none below. The bands compress the
-  range so slow flash models and fast agents both read visibly.
+- Fill is banded (human decisions A.6 and A.7): 5 boxes above 100 tokens/sec
+  (strictly greater than 100, so 100.0 exactly stays in the 4-box band),
+  4 at 70–100, 3 at 50–69.9, 2 at 20–49.9, 1 at 5–19.9, none below 5. The
+  bands compress the range so slow flash models and fast agents both read
+  visibly.
 - All filled boxes use the theme's success green. No warning ramp — speed
   has no pressure semantics. Unknown speed: empty muted boxes.
 - Speed = output tokens produced divided by the wall time producing them,
