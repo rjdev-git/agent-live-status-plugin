@@ -102,7 +102,7 @@ currently viewed (other tabs' sessions are invisible here).
 - Indented under the role with tree glyphs `├` (more follow) and `└` (last).
   Unnumbered.
 - Fields in order: session title (max 8 cells, clipped with `…`), model
-  short label (max 13 cells via R5's split rule), speed bar (5 boxes, R6).
+  short label (max 12 cells via R5's split rule), speed bar (5 boxes, R6).
 - Colour: same rule as the working role row.
 - A succeeded instance disappears immediately: its row collapses back into
   the role row. A failed or interrupted instance does not: it follows R4's
@@ -120,8 +120,8 @@ Rules:
 - Title = `cleanTitle(session.title ?? session.id)` (whitespace collapsed to
   single spaces, trimmed), clipped to 8 cells, padded to 8.
 - Instance model = R8 resolution for that session, rendered as the short
-  label, clipped to 13 cells by the R5 split rule, then padded to the model
-  column.
+  label, clipped to 12 cells by the R5 split rule, then padded to the model
+  column; one separator cell follows the column before the boxes.
 - "Finished" means status is no longer `running`. A succeeded session has no
   row at any age. Failed and interrupted sessions are the R4 exception and
   keep a row only inside the window.
@@ -166,28 +166,30 @@ Design decisions:
 ## R5 — Layout arithmetic
 
 Both row shapes are exactly `width` cells wide; the boxes always occupy the
-last 5 columns, aligned across rows.
+last 5 columns, aligned across rows. Column `W − 5` of both shapes is the
+separator cell, so `head` is `W − 5` cells and ends with that space.
 
 - `width` option, default 35 cells.
 - Model label rule: when `Provider/Model` overflows its field, the provider
   keeps at most half of it, and the model name gets whatever remains; the
   whole label clips to `field - 1` characters plus `…`.
-- Role field: number 3 + name 9 + space 1 + model (width - 18, capped at 20)
-  + boxes 5. At the default width the model field is 17 cells.
+- Role field: number 3 + name 9 + space 1 + model (width - 19, capped at 20)
+  + separator 1 + boxes 5. At the default width the model field is 16 cells.
 - Instance field: indent 3 (space, glyph, space) + title 8 + space 1 + model
-  13 + padding to align + boxes 5.
-- Boxes are tight: no gap cell before either row's boxes. The freed cell
-  belongs to that row's model column, which is why the role column is
-  `width - 18` and the instance column `width - 17`.
+  12 + padding to align + separator 1 + boxes 5.
+- Exactly one separator cell sits between the model field and the boxes on
+  both row shapes (`ROLE_BAR_GAP_CELLS`, `INSTANCE_BAR_GAP_CELLS`, A.5).
+  Between the box glyphs there is no gap (R6). The separator is why the role
+  column is `width - 19` and the instance column `width - 18`.
 - `One constant, one meaning`: each field has its own named constant; one
   constant never serves a second field.
 
 The cell-by-cell arithmetic is §1. The cap in "capped at 20" is applied to
-the model **label text**; the model **column** stays `width - 18` so the row
-is exactly `width` cells for widths above 38 as well (F1). The instance model
-**text** is 13 cells at every width where the column allows it; above 35 the
+the model **label text**; the model **column** stays `width - 19` so the row
+is exactly `width` cells for widths above 39 as well (F1). The instance model
+**text** is 12 cells at every width where the column allows it; above 35 the
 extra column cells become padding (F21). Below 30 cells the instance model
-text shrinks below 13 to keep the row exactly `width` (F1).
+text shrinks below 12 to keep the row exactly `width` (F1).
 
 ## R6 — Speed bar
 
@@ -240,6 +242,12 @@ Design decisions:
   `"muted"` for `filled === 0`; the TUI maps those to
   `theme.text.feedback.success.base` and `theme.text.muted`. There is no
   warning or error bar colour anywhere (C21).
+- **Glyph.** A bar is `BAR_GLYPH_FILLED.repeat(filled) +
+  BAR_GLYPH_EMPTY.repeat(BAR_CELLS − filled)`: `▓` (U+2593) filled, `░`
+  (U+2591) empty (C30, C31). Consecutive boxes are adjacent, with no gap cell
+  and no space character inside the bar; any gap the eye perceives comes from
+  the glyph's own advance, and the pinned pair advances flush. The only cell
+  between the model field and the bar is the one separator cell of R5.
 - A grace instance keeps its row text in warning colour (R4) but its boxes
   are empty muted, like a grace role row (F18).
 
@@ -405,6 +413,11 @@ SDK.
 All positions are 1-based columns. `W` is the effective width; `W >= 19`
 (F1). At `W` below 19 the configured width is raised to 19 before layout.
 
+Box glyphs (C30, C31) each advance one cell. The A.4 glyph swap changes no
+column, no sum, and no width in this section: `BAR_CELLS` stays 5 and the
+literals alone moved. A.5 restores the one-cell separator before the bar, so
+§1.1 and §1.2 carry recomputed columns; the glyphs stay as A.4 left them.
+
 ### 1.1 Role row
 
 | Columns | Cells | Field | Constant |
@@ -412,17 +425,19 @@ All positions are 1-based columns. `W` is the effective width; `W >= 19`
 | 1–3 | 3 | number: two digits + `.` (` 1.`, `10.`) | `ROLE_NUMBER_CELLS` |
 | 4–12 | 9 | agent name, clipped with `…`, padded | `ROLE_NAME_CELLS` |
 | 13 | 1 | space between name and model | `ROLE_NAME_GAP_CELLS` |
-| 14–(W−5) | W−18 | model column: label clipped to `min(W−18, 20)` cells, padded to the column | `ROLE_FIXED_CELLS`, `ROLE_MODEL_MAX_CELLS` |
-| W−4–W | 5 | speed boxes (tight after the model column) | `BAR_CELLS` |
+| 14–(W−6) | W−19 | model column: label clipped to `min(W−19, 20)` cells, padded to the column | `ROLE_FIXED_CELLS`, `ROLE_MODEL_MAX_CELLS` |
+| W−5 | 1 | separator before the boxes | `ROLE_BAR_GAP_CELLS` |
+| W−4–W | 5 | speed boxes (tight between glyphs) | `BAR_CELLS` |
 
-Head length = `3 + 9 + 1 + (W−18) = W − 5`; plus 5 boxes = `W`.
+Head length = `3 + 9 + 1 + (W−19) + 1 = W − 5`; plus 5 boxes = `W`.
 
-At `W = 35`: number 3, name 9, space 1, model column 17 (cap 20 not reached),
-boxes 5. `3 + 9 + 1 + 17 + 5 = 35`.
-Example: ` 1.explore   Go/Kimi K3.1 Pro ` + 5 boxes: the 16-cell label plus
-1 pad cell fills the 17-cell column, so no cell exists between the label and
+At `W = 35`: number 3, name 9, space 1, model column 16 (cap 20 not reached),
+separator 1, boxes 5. `3 + 9 + 1 + 16 + 1 + 5 = 35`.
+Example: ` 1.explore   Go/Kimi K3.1 Pro ` + 5 boxes: the 16-cell label fills
+the 16-cell column exactly and the separator is the cell between the label and
 the boxes.
-A role with no `agent.model`: the model column is 17 spaces.
+A role with no `agent.model`: the model column is 16 spaces plus the 1-cell
+separator.
 
 ### 1.2 Instance row
 
@@ -431,15 +446,19 @@ A role with no `agent.model`: the model column is 17 spaces.
 | 1–3 | 3 | indent: space, glyph (`├` or `└`), space | `INSTANCE_INDENT_CELLS` |
 | 4–11 | 8 | session title, clipped with `…`, padded | `INSTANCE_TITLE_CELLS` |
 | 12 | 1 | space between title and model | `INSTANCE_TITLE_GAP_CELLS` |
-| 13–(W−5) | W−17 | model column: label clipped to `min(W−17, 13)`, padded to the column | `INSTANCE_FIXED_CELLS`, `INSTANCE_MODEL_CELLS` |
-| W−4–W | 5 | speed boxes (tight after the model column) | `BAR_CELLS` |
+| 13–(W−6) | W−18 | model column: label clipped to `min(W−18, 12)`, padded to the column | `INSTANCE_FIXED_CELLS`, `INSTANCE_MODEL_CELLS` |
+| W−5 | 1 | separator before the boxes | `INSTANCE_BAR_GAP_CELLS` |
+| W−4–W | 5 | speed boxes (tight between glyphs) | `BAR_CELLS` |
 
-Head length = `3 + 8 + 1 + (W−17) = W − 5`; plus 5 boxes = `W`.
+Head length = `3 + 8 + 1 + (W−18) + 1 = W − 5`; plus 5 boxes = `W`.
 
-At `W = 35`: indent 3, title 8, space 1, model column 18 (13 text cells + 5
-padding), boxes 5. `3 + 8 + 1 + 18 + 5 = 35`. The title field is always 8
-cells even when the row is narrow; the model text shrinks below 13 only when
-the column itself is narrower than 13 (`W < 30`).
+At `W = 35`: indent 3, title 8, space 1, model column 17 (12 text cells + 5
+padding), separator 1, boxes 5. `3 + 8 + 1 + 17 + 1 + 5 = 35`. The title field
+is always 8 cells even when the row is narrow; the model text shrinks below 12
+only when the column itself is narrower than 12 (`W < 30`).
+
+Both shapes put the separator in column `W − 5`, so the last model cell and the
+bar align across role and instance rows.
 
 ### 1.3 Model label split rule
 
@@ -459,8 +478,8 @@ Input: a full or short label `P/M…` and a budget `B` cells.
 `n == 1`; otherwise the widest prefix with `prefix + 1 <= n` cells plus `…`.
 Padding to a column is always spaces.
 
-The role label budget is `min(W−18, 20)`; the instance label budget is
-`min(W−17, 13)`. The picker label uses a plain `clip(label,
+The role label budget is `min(W−19, 20)`; the instance label budget is
+`min(W−18, 12)`. The picker label uses a plain `clip(label,
 PICKER_MODEL_CELLS)` — the split rule is not applied there (R9) — and the
 picker agent uses `clip(agent, PICKER_AGENT_CELLS)` with the same `clip` rule
 (§1.3, C24, C28, F16).
@@ -585,8 +604,9 @@ item 4.
 ## 6. Contract numbers
 
 `cellWidth` follows §0. All fixtures are ASCII except the wide-cell cases in
-C5 and C11. Values are exact, not shapes; a fixture that asserts only width or
-"contains" does not satisfy R12.
+C5 and C11, and the box glyphs in C30/C31 (`▓` U+2593, `░` U+2591), each of
+which counts as one cell. Values are exact, not shapes; a fixture that
+asserts only width or "contains" does not satisfy R12.
 
 | # | Constant | Value | Field | Fits fixture | Does-not-fit fixture | Req |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -594,17 +614,17 @@ C5 and C11. Values are exact, not shapes; a fixture that asserts only width or
 | C2 | `DEFAULT_WIDTH` | 35 | row width when the option is absent | width unset → role head 30 cells + 5 boxes, instance head 30 + 5 | width 30 → role head 25, instance head 25 | R5 |
 | C3 | `ROLE_NUMBER_DIGITS` | 2 | role number digits | role 9 → `" 9."`, role 10 → `"10."` | no emitted role index reaches 100 (body cap); the fixture asserts the highest emitted number is the tenth role | R2 |
 | C4 | `ROLE_NUMBER_CELLS` | 3 | number field (2 digits + `.`) | first role: `head.slice(0,3) === " 1."` | tenth role: `head.slice(0,3) === "10."` (no leading space, still 3 cells) | R2, R5 |
-| C5 | `ROLE_NAME_CELLS` | 9 | agent name field | `"explore"` → `"explore  "`; 9-cell `"123456789"` unchanged | `"1234567890"` → `"12345678…"`; wide `"调研团队组"` (10 cells) → `"调研团队…"` (9 cells) | R2, R5 |
+| C5 | `ROLE_NAME_CELLS` | 9 | agent name field | `"explore"` → `"explore  "`; 9-cell `"123456789"` unchanged | `"1234567890"` → `"12345678…"`; wide `"调研团队组"` (5 wide code points = 10 cells) → `"调研团队…"` (4 wide code points = 8 cells + `…` = 9 cells) | R2, R5 |
 | C6 | `ROLE_NAME_GAP_CELLS` | 1 | space after the name field | at width 35, `"explore"` + model `Go/Kimi K3.1 Pro` → head `" 1.explore   Go/Kimi K3.1 Pro "` (30 cells, 0-based `head[12] === " "`) | a gap-less implementation starts the model one cell early: its head is `" 1.explore  Go/Kimi K3.1 Pro  "` (30 cells, `head[12] === "G"`, model column 18), so the pinned string fails it | R5 |
-| C7 | `ROLE_MODEL_MAX_CELLS` | 20 | role model label text cap | width 39 (column 21): `"Go/Kimi K3.1 Pro Max"` (20 cells) kept whole | width 39: `"Go/Kimi K3.1 Pro Maxx"` (21 cells) → `"Go/Kimi K3.1 Pro Ma…"` (20 cells) | R5 |
-| C8 | `ROLE_FIXED_CELLS` | 18 | all row cells except the model column (3+9+1+5) | width 19 → model column 1, head 14 | width 18 → effective width raised to 19 (F1) | R5 |
+| C7 | `ROLE_MODEL_MAX_CELLS` | 20 | role model label text cap | width 40 (column 21): `"Go/Kimi K3.1 Pro Max"` (20 cells) kept whole | width 40: `"Go/Kimi K3.1 Pro Maxx"` (21 cells) → `"Go/Kimi K3.1 Pro Ma…"` (20 cells) | R5 |
+| C8 | `ROLE_FIXED_CELLS` | 19 | all row cells except the model column (3+9+1+1+5) | width 19 → model column 0, head 14; width 40 → model column 21, head 35 | width 18 → effective width raised to 19 (F1) | R5 |
 | C9 | `BAR_CELLS` | 5 | boxes | `filled = 5` → 5 filled glyphs | `filled = 0` → 5 empty glyphs | R1, R3, R5, R6 |
 | C10 | `INSTANCE_INDENT_CELLS` | 3 | indent (space, glyph, space) | first of two instances at width 35, title `Inspect modules`, model `Go/Grok 4.7`: head `" ├ Inspect… Go/Grok 4.7       "` (30 cells) | both directions fail: a not-last instance rendering `" └ Inspect… Go/Grok 4.7       "` (index 1 is `└`), and the last instance rendering `" ├ …"` instead of `" └ …"`; a 2-cell indent shifts the title left (`" ├I…"`) and fails `head.slice(0, 3) === " ├ "`. The fixture pins `├` on every instance except the last and `└` on the last | R3, R5 |
 | C11 | `INSTANCE_TITLE_CELLS` | 8 | instance title field | `"Inspect modules"` → `"Inspect…"`; 8-cell title unchanged | 9-cell `"abcdefghi"` → `"abcdefg…"`; wide `"调研团队组"` (10 cells) → `"调研团…"` (7 cells: 6 + `…`) | R3, R5 |
 | C12 | `INSTANCE_TITLE_GAP_CELLS` | 1 | space after the title field | 0-based `head[11] === " "` at width 35 | a 9-cell title is clipped to 8, so no title cell lands in the gap column | R5 |
-| C13 | `INSTANCE_MODEL_CELLS` | 13 | instance model label text cap | width 35: `"Go/Grok 4.7.1"` (13 cells) kept whole, so the column is 13 text + 5 padding | budget 13: `"OpenCode/Kimi K3.1 Pro"` (22 cells) → split `"Open…/Kimi K…"` (13 cells); plain `clip` gives `"OpenCode/Kim…"` (13 cells), so the fixture discriminates the split rule | R3, R5 |
-| C14 | `INSTANCE_FIXED_CELLS` | 17 | all row cells except the model column (3+8+1+5) | width 35 → model column 18 = 13 text + 5 padding | width 18 → effective width raised to 19, model column 2 (F1) | R5 |
-| C15 | tight boxes (no gap cell) | n/a | the model column ends where the boxes start | width 35 role: `"Go/Grok 4.7 Flash"` (17 cells) renders whole, because the column is `width − 18 = 17` | a gap-cell implementation has a 16-cell role column and returns `"Go/Grok 4.7 Fla…"` (16 cells); instance twin at 13 vs 12: `"Go/Grok 4.7.1"` whole vs `"Go/Grok 4.7…"` | R5 |
+| C13 | `INSTANCE_MODEL_CELLS` | 12 | instance model label text cap | width 35: `"Go/Kimi K3.1"` (12 cells) kept whole, so the column is 12 text + 5 padding | budget 12: `"OpenCode/Kimi K3.1 Pro"` (22 cells) → split `"Open…/Kimi …"` (12 cells); plain `clip` gives `"OpenCode/Ki…"` (12 cells), so the fixture discriminates the split rule | R3, R5 |
+| C14 | `INSTANCE_FIXED_CELLS` | 18 | all row cells except the model column (3+8+1+1+5) | width 35 → model column 17 = 12 text + 5 padding | width 18 → effective width raised to 19, model column 1 (F1) | R5 |
+| C15 | separator cell, tight glyphs | `ROLE_BAR_GAP_CELLS` = `INSTANCE_BAR_GAP_CELLS` = 1; 0 between box glyphs | the model column ends one cell before the boxes | width 35 role: `"Go/Grok 4.7"` (11 cells) leaves 5 pad cells in the 16-cell column, then the separator, so head `" 1.explore   Go/Grok 4.7      "` (30 cells) ends with 6 spaces; `"Go/Kimi K3.1 Pro"` (16 cells) fills the column and the separator is the 30th cell (`" 1.explore   Go/Kimi K3.1 Pro "`). Width 35 instance: `"Go/Kimi K3.1"` (12 cells) + 5 pad + 1 separator | width 35 role: `"Go/Grok 4.7 Flash"` (17 cells) → split `"Go/Grok 4.7 Fla…"` (16) and head `" 1.explore   Go/Grok 4.7 Fla… "` (30); the A.3 no-separator column of 17 keeps the label whole (`" 1.explore   Go/Grok 4.7 Flash"`, 30) and fails; a model field that eats the separator renders a 29-cell head (`" 1.explore   Go/Grok 4.7     "`) and fails the 6-space pin. Instance twin at 12 vs 13: `"Go/Grok 4.7.1"` (13) → `"Go/Grok 4.7…"` (12) and head `" ├ Inspect… Go/Grok 4.7…      "`; the 13-cell text under A.3 renders `" ├ Inspect… Go/Grok 4.7.1     "` | R5, R6 |
 | C16 | `FILL_MIN_BOXES` | 0 | lower fill clamp | `tps = 0` → `filled = 0` | `tps = 9` → `filled = 0` (below half a box) | R6 |
 | C17 | `FILL_MAX_BOXES` | 5 | upper fill clamp | `tps = 1000` → `filled = 5` (clamped, not 50) | `tps = 89` → `filled = 4` (clamp not reached) | R6 |
 | C18 | `TPS_PER_BOX` | 20 | tokens/sec per filled box | `tps = 20` → `filled = 1` (exactly one box); `tps = 19` → `filled = 1` | `tps = 29` → `filled = 1` (needs 30 for two boxes) | R6 |
@@ -615,21 +635,32 @@ C5 and C11. Values are exact, not shapes; a fixture that asserts only width or
 | C23 | `GRACE_TICK_MS` | 1 000 | ticker period | one tick moves `now` from 29 000 to 30 000, so the grace row folds | no grace row → no interval scheduled | R4 |
 | C24 | `PICKER_MODEL_CELLS` | 96 | picker model clip | 96-cell full label kept | 97 cells → 95 cells + `…` | R9 |
 | C25 | `ELLIPSIS_CELLS` | 1 | clip reservation | `clip("abcdef", 4) = "abc…"` | `clip("abc", 1) = "…"` | R5 |
-| C26 | `PROVIDER_MAX_SHARE` | 1/2 of the field | provider share in the split rule | budget 16: `"Go/MiniMax M3.1 Flash"` → `"Go/MiniMax M3.1…"` | budget 16: `"SomeVeryBigName/Model"` → `"SomeVe…/Model"` (provider 7 cells + `/`) | R5 |
-| C27 | `UNKNOWN_MODEL` | text `unknown model` | last resolution fallback | column 13 (width 30) keeps the 13-cell text whole | column 12 (width 29) → `"unknown mod…"` (12 cells) | R8 |
+| C26 | `PROVIDER_MAX_SHARE` | 1/2 of the field | provider share in the split rule | budget 15: `"Go/Kimi K3.1 Pro"` (16 cells) → `"Go/Kimi K3.1 P…"` (15 cells); provider `Go` (2 cells) is inside the 6-cell provider text cap | budget 15: `"SomeVeryBigName/Model"` → `"SomeV…/Model"` (provider text 6 cells + `/` = 7 = `floor(15/2)`) | R5 |
+| C27 | `UNKNOWN_MODEL` | text `unknown model` | last resolution fallback | column 12 (width 30) → `"unknown mod…"` (12 cells; the 13-cell text clips to the 12-cell text cap) | column 11 (width 29) → `"unknown mo…"` (11 cells; the column binds); column 21 (width 39) is still `"unknown mod…"`, never the whole 13-cell text | R8 |
 | C28 | `PICKER_AGENT_CELLS` | 24 | picker agent field | `"explore-deep-review-qa"` (22 cells) and `"explore-deep-review-qa12"` (24 cells) kept whole | `"explore-deep-review-qa123"` (25 cells) → `"explore-deep-review-qa1…"` (23 agent cells + `…`, 24 cells) | R9 |
 | C29 | picker title budgets (independence rule) | agent ≤ `PICKER_AGENT_CELLS`, model ≤ `PICKER_MODEL_CELLS`; neither consumes the other | picker title `agent · model` | agent `"explore-deep-review-qa12"` (24 cells) with model `"m"` × 96 (96 cells) → all 24 agent cells and all 96 model cells render unclipped | agent `"explore-deep-review-qa123"` (25 cells) with the same 96-cell model → agent renders `"explore-deep-review-qa1…"` (24 cells) and the model still renders 96 cells, not 95 (an implementation subtracting the agent overflow from `PICKER_MODEL_CELLS` yields 95 and fails) | R9 |
+| C30 | `BAR_GLYPH_FILLED` | `"▓"` (U+2593, 1 cell) | filled box glyph | `filled = 5` → `"▓▓▓▓▓"` (5 cells); a partially filled bar keeps the filled run leftmost | `filled = 0` → `""` (no filled glyph); the glyph is not U+25AE `▮` | R6 |
+| C31 | `BAR_GLYPH_EMPTY` | `"░"` (U+2591, 1 cell) | empty box glyph | `filled = 0` → `"░░░░░"` (5 cells); `filled = 4` → `"▓▓▓▓░"` (5 cells) | `filled = 5` → `""` (no empty glyph); the glyph is not U+25AF `▯` | R6 |
 
-One constant, one meaning, checked at the two places the numbers collide:
+One constant, one meaning, checked at the places the numbers collide:
 
 - `BAR_CELLS` (glyphs rendered) and `FILL_MAX_BOXES` (upper fill clamp) are
   both 5 by construction, but they are different fields. The invariant
   `0 <= filled <= BAR_CELLS` is asserted, and `filled` is produced only by the
   C19 formula.
+- `BAR_GLYPH_FILLED` and `BAR_GLYPH_EMPTY` are two constants for two fields
+  (filled run, empty remainder). Neither may serve the other, and neither may
+  be written as a bare literal at the call site (C30, C31).
 - `ROLE_MODEL_MAX_CELLS` (20) caps the role **text**; the role **column** is
-  `ROLE_FIXED_CELLS`'s complement (`width − 18`). Neither is used for the
-  instance column, which has `INSTANCE_MODEL_CELLS` (13) and
-  `INSTANCE_FIXED_CELLS` (17).
+  `ROLE_FIXED_CELLS`'s complement (`width − 19`). Neither is used for the
+  instance column, which has `INSTANCE_MODEL_CELLS` (12) and
+  `INSTANCE_FIXED_CELLS` (18).
+- `ROLE_BAR_GAP_CELLS` and `INSTANCE_BAR_GAP_CELLS` are two constants for two
+  fields (role separator, instance separator). Both are 1 by construction, but
+  neither may be replaced by the other, by `ROLE_NAME_GAP_CELLS`, or by a bare
+  literal at the call site (C15). The separator belongs to `head` (its last
+  cell), not to the bar: `head` is `W − 5` cells and the boxes are appended
+  flush.
 
 Fixtures for C1 that pin the section-stop rule (R7, §4, F5). Width 35;
 sections built from roles and instances as stated.- Stop rule (discriminating): role `A` with 7 instances (8 body lines), then
@@ -645,33 +676,65 @@ sections built from roles and instances as stated.- Stop rule (discriminating): 
 - Five-instance role boundary: role with 5 instances (6 lines) plus 10 idle
   roles → body = 6 + 4 idle = 10 lines, `more = 6`.
 
+C8 recomputation (width ladder), pinned — `ROLE_FIXED_CELLS = 19`, so the
+role model column is `W − 19` and the head is `W − 5` at every width:
+
+| W | model column | head cells | head + 5 boxes |
+| --- | --- | --- | --- |
+| 19 | 0 | 14 | 19 |
+| 20 | 1 | 15 | 20 |
+| 29 | 10 | 24 | 29 |
+| 30 | 11 | 25 | 30 |
+| 39 | 20 | 34 | 39 |
+| 40 | 21 | 35 | 40 |
+
+At `W = 19` the model column is empty (0 cells), so `clip(label, 0) = ""` and
+the row is `3 + 9 + 1 + 0 + 1 + 5 = 19`; the floor `MIN_ROW_CELLS = 19` is
+unchanged (F1). At `W = 40` the column is 21 but the label text stops at
+`ROLE_MODEL_MAX_CELLS = 20` (C7). A width of 18 is raised to 19 before layout.
+
+C5 recomputation (wide cells), pinned — `clip("调研团队组", 9)`:
+
+- Input `"调研团队组"`, char by char: 调 2, 研 2, 团 2, 队 2, 组 2 — 5 wide code
+  points, 10 cells.
+- Widest prefix with `prefix + 1 <= 9` is 4 code points = 8 cells
+  (`"调研团队"`); plus `…` (1 cell) = `"调研团队…"`, 9 cells. **This is the
+  pinned fixture.** An implementation that emits `"调研团…"` (3 code points =
+  6 cells + `…` = 7 cells) underfills the 9-cell budget and fails.
+- C11's twin is the same 10-cell input at budget 8: the widest prefix with
+  `prefix + 1 <= 8` is 3 code points = 6 cells, so `"调研团…"` (7 cells,
+  6 + `…`), which is why the 8-cell title field pins the shorter string.
+- The 16-cell form `"调研团队组团队组"` (8 wide code points = 16 cells) clips to
+  the same 9-cell `"调研团队…"`; it is not the pinned input. A fixture that
+  calls that string "10 cells" has miscounted it, and the input this row pins
+  is the 5-code-point `"调研团队组"`.
+
 C13 split-rule recomputation, both strings derived from §1.3 and pinned:
 
-- Input `label = "OpenCode/Kimi K3.1 Pro"`, budget `B = 13`.
-  `cellWidth(label) = 8 + 1 + 13 = 22 > 13`, and the label contains `/`.
-- `S = floor(13 / 2) = 6`; provider text `clip("OpenCode", 5)` = widest prefix
+- Input `label = "OpenCode/Kimi K3.1 Pro"`, budget `B = 12`.
+  `cellWidth(label) = 8 + 1 + 13 = 22 > 12`, and the label contains `/`.
+- `S = floor(12 / 2) = 6`; provider text `clip("OpenCode", 5)` = widest prefix
   with `prefix + 1 <= 5` → `"Open"` (4 cells) → `"Open…"` (5 cells).
-- Model budget `= 13 − 5 − 1 = 7`; `clip("Kimi K3.1 Pro", 7)` → widest prefix
-  with `prefix + 1 <= 7` → `"Kimi K"` (6 cells) → `"Kimi K…"` (7 cells).
-- Split result: `"Open…/Kimi K…"`, `5 + 1 + 7 = 13` cells. **This is the
-  pinned fixture.** (At the old 12-cell budget the same input gave
-  `"Open…/Kimi …"`; the whole string moves by one cell.)
-- Plain clipping of the same label: `clip(label, 13)` → widest prefix with
-  `prefix + 1 <= 13` → `"OpenCode/Kim"` (12 cells) → `"OpenCode/Kim…"`
-  (13 cells). The two strings differ, so the fixture fails an implementation
+- Model budget `= 12 − 5 − 1 = 6`; `clip("Kimi K3.1 Pro", 6)` → widest prefix
+  with `prefix + 1 <= 6` → `"Kimi "` (5 cells) → `"Kimi …"` (6 cells).
+- Split result: `"Open…/Kimi …"`, `5 + 1 + 6 = 12` cells. **This is the
+  pinned fixture.**
+- Plain clipping of the same label: `clip(label, 12)` → widest prefix with
+  `prefix + 1 <= 12` → `"OpenCode/Ki"` (11 cells) → `"OpenCode/Ki…"`
+  (12 cells). The two strings differ, so the fixture fails an implementation
   that skips the split rule.
-- **Coincidence at budget 13 — non-discriminating, must not be used as a
+- **Coincidence at budget 12 — non-discriminating, must not be used as a
   fixture.** The retired example `"Go/MiniMax M3.1 Flash"` (21 cells) yields
-  `"Go/MiniMax M…"` under **both** rules:
-  - Split: `S = floor(13 / 2) = 6`; `clip("Go", 5)` returns `"Go"` (2 cells,
-    fits); model budget `= 13 − 2 − 1 = 10`; `clip("MiniMax M3.1 Flash",
-    10)` → `"MiniMax M…"` (9 + 1 cells); result `"Go/MiniMax M…"` (13 cells).
-  - Plain clip: `clip("Go/MiniMax M3.1 Flash", 13)` → `"Go/MiniMax M"` (12
-    cells) + `…` = `"Go/MiniMax M…"` (13 cells).
+  `"Go/MiniMax …"` under **both** rules:
+  - Split: `S = floor(12 / 2) = 6`; `clip("Go", 5)` returns `"Go"` (2 cells,
+    fits); model budget `= 12 − 2 − 1 = 9`; `clip("MiniMax M3.1 Flash",
+    9)` → `"MiniMax "` (8 cells) + `…`; result `"Go/MiniMax …"` (12 cells).
+  - Plain clip: `clip("Go/MiniMax M3.1 Flash", 12)` → `"Go/MiniMax "` (11
+    cells) + `…` = `"Go/MiniMax …"` (12 cells).
   The two strings are identical, so this input cannot catch an implementation
   that skips the split rule. C13's discriminator is the pinned
-  `"OpenCode/Kimi K3.1 Pro"` fixture above: `"Open…/Kimi K…"` (split) against
-  `"OpenCode/Kim…"` (plain clip).
+  `"OpenCode/Kimi K3.1 Pro"` fixture above: `"Open…/Kimi …"` (split) against
+  `"OpenCode/Ki…"` (plain clip).
 
 C28 recomputation, pinned:
 
@@ -705,17 +768,27 @@ Additional exact-value fixtures that carry no number:
 - Overflow line `+2 more · /subagents` exactly (U+00B7, one space each side).
 - Role row at width 35 with `agent.model = Go/Kimi K3.1 Pro`:
   `" 1.explore   Go/Kimi K3.1 Pro "` + 5 boxes (head 30 cells:
-  3 + 9 + 1 + 17; the 16-cell label plus 1 pad fills the 17-cell model column
-  exactly, and no gap cell follows).
+  3 + 9 + 1 + 16 + 1; the 16-cell label fills the 16-cell model column
+  exactly, and the last head cell is the separator space).
 - Instance row at width 35, title `Inspect modules`, model `Go/Grok 4.7`:
   `" ├ Inspect… Go/Grok 4.7       "` + 5 boxes (head 30 cells:
-  3 indent + 8 title + 1 gap + 18 model column; the 11-cell label leaves
-  7 pad cells in the column, so the run after `4.7` is 7 spaces, not 6 + 1).
-- Tight-boxes discriminator at width 35: role label `"Go/Grok 4.7 Flash"`
-  (17 cells) renders whole; with a gap cell the column is 16 and the label
-  becomes `"Go/Grok 4.7 Fla…"`. Instance label `"Go/Grok 4.7.1"` (13 cells)
-  renders whole; with a gap cell the budget is 12 and it becomes
-  `"Go/Grok 4.7…"`.
+  3 indent + 8 title + 1 gap + 17 model column + 1 separator; the 11-cell
+  label leaves 6 pad cells in the 17-cell column, so the run after `4.7` is
+  6 pad + 1 separator = 7 spaces).
+- Speed bar glyphs at width 35, `filled = 3` (C19: `tps` 50–69): the role row
+  `" 1.explore   Go/Kimi K3.1 Pro "` (30 cells) renders followed by `"▓▓▓░░"`,
+  so the row is 35 cells; the bar follows the separator cell that ends the
+  head, and no space sits inside the bar. `filled = 0` renders `"░░░░░"`;
+  `filled = 5` renders `"▓▓▓▓▓"` (C30, C31).
+- Separator discriminator at width 35 (C15): role label `"Go/Grok 4.7 Flash"`
+  (17 cells) no longer fits the 16-cell column, so it becomes
+  `"Go/Grok 4.7 Fla…"` and the head is `" 1.explore   Go/Grok 4.7 Fla… "`
+  (30 cells, ending in the separator); an A.3 implementation with no separator
+  and a 17-cell column keeps the label whole
+  (`" 1.explore   Go/Grok 4.7 Flash"`, 30 cells). Instance twin: `"Go/Kimi
+  K3.1"` (12 cells) fits the 17-cell column with 5 pad + 1 separator;
+  `"Go/Grok 4.7.1"` (13 cells) becomes `"Go/Grok 4.7…"` (12 cells), where the
+  A.3 budget of 13 keeps it whole.
 - Role ordering: instances created at 20 and 10 → the 10 role first; inside a
   role, 10 before 30 with `├` then `└`.
 - Idle ordering: `alpha`, `Zeta` → `alpha` before `Zeta`.
@@ -725,7 +798,8 @@ Additional exact-value fixtures that carry no number:
 ## 7. Known gaps
 
 Where the current code, read-only, disagrees with this design. Each gap is a
-Coder task; findings and fixes reference these IDs.
+Coder task; findings and fixes reference these IDs. D1 is the one entry that is
+not a gap: it registers a temporary diagnostic, with no contract number.
 
 - **G1 (R11)** — No guard around source reads, view building, or colour
   parsing. An exception inside `sources()` or `panel()` leaves the slot
@@ -752,18 +826,22 @@ Coder task; findings and fixes reference these IDs.
 - **G9 (R5)** — Width arithmetic is derived from `min(20, width − 19)` with a
   floor of 4: rows are 39 cells for width > 39, wider than `width` for very
   narrow widths, and the old instance column (`budget + 1`) is one cell short
-  at width > 39. The design uses `width − 18` (role) and `width − 17`
-  (instance) columns, no gap cell, the cap on the label **text**, and a floor
-  of 19 (C7, C8, C13, C14, C15).
+  at width > 39. The design uses `width − 19` (role) and `width − 18`
+  (instance) columns, one separator cell before the boxes, the cap on the
+  label **text**, and a floor of 19 (C7, C8, C13, C14, C15).
 - **G10 (R5) — mostly obsolete; the width constants still move (G9).** The
   old claims are gone from the code: the instance column has its own
   `INSTANCE_FIXED_CELLS` / `INSTANCE_MODEL_CELLS`, the role cap has
   `ROLE_MODEL_MAX_CELLS`, and the former bare literals (`1000`, `96`, `10`,
-  `35`) are named. What remains is A.3's layout move: `ROLE_FIXED_CELLS` 19 →
-  18, `INSTANCE_MODEL_CELLS` 12 → 13, `INSTANCE_FIXED_CELLS` 18 → 17, and
-  `ROLE_BAR_GAP_CELLS` / `INSTANCE_BAR_GAP_CELLS` deleted (`src/lib/collect.ts`
-  `:246`, `:249`, `:261`, `:264`, `:267`). `MIN_ROW_CELLS = 19` stays the
-  floor (F1). The 60 / 1000 in `elapsed` are time units, not field widths.
+  `35`) are named. What remains is A.5's separator move, which partially
+  reverses A.3's layout move: `ROLE_FIXED_CELLS` 18 → 19,
+  `INSTANCE_FIXED_CELLS` 17 → 18, `INSTANCE_MODEL_CELLS` 13 → 12, and
+  `ROLE_BAR_GAP_CELLS = 1` / `INSTANCE_BAR_GAP_CELLS = 1` reinstated as two
+  separate constants (`src/lib/collect.ts:255`, `:267`, `:270`; `roleHead`
+  `:408-416`, `instanceHead` `:419-424`). `head` keeps its `W − 5` length and
+  now ends with the separator cell; the TUI appends the boxes flush
+  (`src/tui.tsx:319-321`). `MIN_ROW_CELLS = 19` stays the floor (F1). The
+  60 / 1000 in `elapsed` are time units, not field widths.
 - **G11 (R2, R3, R5)** — `truncate` counts UTF-16 code units, not display
   cells; wide characters and surrogate pairs misalign the boxes. The design
   measures cells (§0).
@@ -822,6 +900,22 @@ Coder task; findings and fixes reference these IDs.
   `theme.text.muted`, no warning or error path. The row **text** keeps its
   existing state colours (idle muted, grace warning, agent colour), which is
   a separate field.
+- **G19 (R6)** — The box literals are `FILL = "▮"` (U+25AE) and
+  `EMPTY = "▯"` (U+25AF) (`src/tui.tsx:26-27`). Required: `BAR_GLYPH_FILLED =
+  "▓"` (U+2593) and `BAR_GLYPH_EMPTY = "░"` (U+2591), one constant each, no
+  other literal. Nothing else in the bar changes: `BAR_CELLS` stays 5, the
+  arithmetic and colours are untouched (C30, C31, A.4).
+- **D1 debug option (temporary diagnostic, not in the contract).** The plugin
+  accepts `debug: true` or `debug: "<path>"` and appends one JSONL record per
+  recompute to `/tmp/opencode/subagent-model-debug.jsonl`; the string form
+  overrides the path. It exists only for the current live-data investigation
+  of R6's message timings (F19, G16), and it is removed once that
+  investigation closes — the PM's commit message for this change names D1 and
+  that removal. Not a C-row and no contract number: no requirement depends on
+  it. With `debug` absent nothing is written and the dump path is never
+  touched; a write failure is swallowed because it is a diagnostic, not a
+  panel feature, so it cannot reach the R11 toast guard or change a row.
+  `README.md` documents the option as temporary.
 
 ## 8. Findings for the Project Manager
 
@@ -829,16 +923,19 @@ Open points in `docs/Product.md` that this design resolves. None may be
 settled by the Designer alone; the Project Manager takes them to the Analyst
 (or the human) for the final wording. F3 and F14 are settled by Product
 updates; F16 is settled (human decision A1); F17 is obsolete at A.3; F18–F22
-are the new decisions A.3 forces. F16 and F17 are listed with their source
-rather than as requests for an answer.
+are the new decisions A.3 forces; F23 is settled (human decision A.4); F24 is
+settled (human decision A.5). F16, F17, F23 and F24 are listed with their
+source rather than as requests for an answer.
 
 - **F1 (R5 width domain).** R5 gives no lower bound on `width`. Below 19 cells
   the role row cannot hold its fields; the design raises the effective width
-  to 19. Above 38, "model (width − 18, capped at 20)" and "both rows exactly
-  `width` cells" conflict if the cap is read as the column. The design reads
-  the cap as the label **text** and keeps the role column at `width − 18`,
-  which preserves "exactly width" and "boxes last 5" for every width ≥ 19.
-  Confirm.
+  to 19. Above 39, "model (width - 19, capped at 20)" and "Both row shapes are
+  exactly `width` cells wide" conflict if the cap is read as the column. The
+  design reads the cap as the label **text** and keeps the role column at
+  `width - 19`, which preserves "Both row shapes are exactly `width` cells
+  wide" and "the boxes always occupy the last 5 columns" for every width ≥ 19.
+  Consequence at the floor: at exactly 19 the model column is 0 cells, so the
+  row is number + name + gap + separator + boxes (C8 ladder). Confirm.
 - **F2 (R7 vs R4 ordering).** R7 says "roles with instances first". A
   grace-only role has instances (R4), but R4 makes grace a distinct colour
   state. The design orders grace-bearing roles with active roles by oldest
@@ -937,10 +1034,10 @@ rather than as requests for an answer.
   with half-up; the does-not-fit boundary is `9 → 0` (C19). Confirm half-up,
   or name floor/half-even and the boundary fixtures move with it.
 - **F21 (R5 instance model text above width 35).** R5 gives the role model a
-  width-dependent field (`width − 18`, capped 20) but the instance model a
-  fixed `13` plus "padding to align". The design reads that literally: the
-  instance text cap stays 13 at every width and the extra column cells are
-  padding (C13, C14). Confirm, or say the instance text grows with the
+  width-dependent field (`width - 19, capped at 20`) but the instance model a
+  fixed `12` plus "padding to align". The design reads that literally: the
+  instance text cap stays 12 at every width and the extra column cells are
+  padding (C13, C14, C27). Confirm, or say the instance text grows with the
   column like the role's.
 - **F22 (R4/R6 ticker and in-flight messages).** R6 says the speed is
   "recomputed when a new message arrives or on the 1-second ticker", but R4
@@ -950,3 +1047,41 @@ rather than as requests for an answer.
   without new message data changes nothing. A not-yet-completed assistant
   message does not count, because its `tokens.output` is not final. Confirm;
   an always-on ticker would contradict R4 and is not assumed.
+- **F23 (R6 box glyphs) — settled by the human, decision A.4.** The box
+  glyphs are `▓` (U+2593, filled) and `░` (U+2591, empty), replacing
+  `▮`/`▯`, which carry side bearing in common terminal fonts and render with
+  visible gaps between boxes. The choice is font-dependent, not a layout
+  rule: on a font without U+2591/U+2593 coverage the terminal substitutes a
+  fallback glyph, whose advance may differ, but no cell math changes — the
+  layout still emits `BAR_CELLS` glyphs in the last 5 columns and relies on
+  each rendering one cell (§1, C30, C31). If a font renders either glyph at
+  two cells the row would overrun `width`; that is a font property, not a
+  design change, and the pinned fixtures use the one-cell advance. Recorded
+  as a settled decision, not an open question.
+- **F24 (R5 separator cell) — settled by the human, decision A.5.** Exactly one
+  separator cell sits between the model field and the boxes on both row
+  shapes; the model column refunds that cell (`width − 19` role,
+  `width − 18` instance), so both shapes stay exactly `width` cells and the
+  boxes stay in the last 5 columns. This partially reverts A.3's "tight
+  boxes": tight remains **between the box glyphs** (0 gap), and only the
+  model→bar boundary gets the separator. The two separators are two constants
+  for two fields (`ROLE_BAR_GAP_CELLS`, `INSTANCE_BAR_GAP_CELLS`, C15); the
+  glyphs are unchanged (`▓`/`░`, A.4, F23). Recorded as a settled decision,
+  not an open question.
+
+## 9. Revision notes
+
+- **A.4 glyph amendment.** Box glyphs `▮`/`▯` → `▓`/`░` (C30, C31, F23, G19).
+  No arithmetic moved: `BAR_CELLS` stays 5, both rows stay `width` cells, and
+  no §1 column changes. The design document previously named no glyph
+  literal, so the only design text that moved is the new pinned pair, its
+  fixtures, and the flush-adjacency sentence in §R6.
+- **A.5 separator amendment.** Exactly one separator cell between the model
+  field and the boxes on both row shapes (F24, C15). The model column refunds
+  that cell: `ROLE_FIXED_CELLS` 18 → 19, `INSTANCE_FIXED_CELLS` 17 → 18,
+  `INSTANCE_MODEL_CELLS` 13 → 12, and `ROLE_BAR_GAP_CELLS` /
+  `INSTANCE_BAR_GAP_CELLS` restored at 1. This partially reverts A.3; tight
+  stays between glyphs, and A.4's glyphs are unchanged. Rows stay `width`
+  cells and `head` stays `W − 5`; the width-35 example strings, the C8 width
+  ladder, the C13 split fixture (budget 12), the C26 budget (15) and the C27
+  columns (12 at width 30, 11 at width 29) moved with it.

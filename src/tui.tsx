@@ -1,3 +1,5 @@
+import { appendFileSync, mkdirSync } from "node:fs"
+import { dirname } from "node:path"
 import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
 import type { ResolvedTheme } from "@opencode/theme/tui"
@@ -6,25 +8,31 @@ import type { JSX } from "@opentui/solid"
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import {
   BAR_CELLS,
+  BAR_GLYPH_EMPTY,
+  BAR_GLYPH_FILLED,
   BODY_MAX_LINES,
   DEFAULT_WIDTH,
   GRACE_TICK_MS,
+  UNKNOWN_MODEL,
+  barFill,
   barTone,
   collect,
   elapsed,
   filterRows,
   isVisibleRole,
+  modelRef,
   panel,
   matches,
   pickerTitle,
+  speedTps,
   type AgentInfo,
   type PanelRow,
   type RunningSubagent,
   type Sources,
 } from "./lib/collect"
 
-const FILL = "▮"
-const EMPTY = "▯"
+/** Default path for the temporary debug dump; overridable with `debug: <path>`. */
+const DEBUG_LOG_PATH = "/tmp/opencode/subagent-model-debug.jsonl"
 
 const WATCHED_EVENTS = [
   "session.created",
@@ -49,6 +57,8 @@ type Options = {
   compact?: boolean
   bind?: string
   width: number
+  /** Debug log path when the diagnostic is on; undefined keeps it off. */
+  debug?: string
 }
 
 type SlotInput = { sessionID?: string }
@@ -64,6 +74,12 @@ function readOptions(context: Context): Options {
     compact: typeof raw.compact === "boolean" ? raw.compact : undefined,
     bind: typeof raw.bind === "string" ? raw.bind : undefined,
     width: typeof raw.width === "number" && raw.width > 0 ? raw.width : DEFAULT_WIDTH,
+    debug:
+      raw.debug === true
+        ? DEBUG_LOG_PATH
+        : typeof raw.debug === "string" && raw.debug.length > 0
+          ? raw.debug
+          : undefined,
   }
 }
 
@@ -81,8 +97,69 @@ function sources(context: Context): Sources {
 /** Sessions already asked of the host, so each one is synced once (G16). */
 const syncedSessions = new Set<string>()
 
+/** Per-session sync outcome for the temporary debug dump only. */
+const syncState = new Map<string, "pending" | "ok" | "failed">()
+
+/** True only when the diagnostic is on, so the off path writes no debug state. */
+let debugEnabled = false
+
 /** Last sync failure reported, so one broken host call toasts once. */
 let lastSyncFailure: string | undefined
+
+/**
+ * Appends one JSON line to the debug log, creating its directory. A diagnostic
+ * write never breaks the panel (R11).
+ */
+function debugLine(path: string, entry: unknown) {
+  try {
+    mkdirSync(dirname(path), { recursive: true })
+    appendFileSync(path, `${JSON.stringify(entry)}\n`)
+  } catch {
+    // Silent on purpose: the diagnostic must not surface as a plugin error.
+  }
+}
+
+/**
+ * Temporary diagnostic: the exact host shape behind the speed bar. One line per
+ * recompute with every session in scope, its messages, and the derived speed.
+ */
+function debugDump(data: Sources, sessionID: string | undefined, path: string) {
+  try {
+    const scope = sessionID ? data.sessions.root(sessionID) : undefined
+    const sessions = (data.sessions.list() ?? [])
+      .filter(
+        (session) =>
+          session.parentID !== undefined &&
+          scope !== undefined &&
+          data.sessions.root(session.id) === scope,
+      )
+      .map((session) => {
+        const messages = data.sessions.message?.list(session.id) ?? []
+        const ref = modelRef(session, data)
+        const tps = speedTps(messages)
+        const newest = messages.slice(-6).map((entry) => {
+          const message = entry as
+            | { type?: unknown; tokens?: unknown; time?: unknown }
+            | undefined
+          return { type: message?.type, tokens: message?.tokens, time: message?.time }
+        })
+        return {
+          sessionID: session.id,
+          model: ref ? `${ref.providerID}/${ref.id}` : UNKNOWN_MODEL,
+          messages: messages.length,
+          newest,
+          tps,
+          filled: barFill(tps),
+          sync: syncedSessions.has(session.id)
+            ? (syncState.get(session.id) ?? "requested")
+            : "not-requested",
+        }
+      })
+    debugLine(path, { at: Date.now(), sessions })
+  } catch {
+    // Silent on purpose: a diagnostic failure must not become a panel failure.
+  }
+}
 
 /**
  * Loads a session and its messages into the TUI data cache, then asks the panel
@@ -92,13 +169,16 @@ let lastSyncFailure: string | undefined
 async function syncSession(context: Context, sessionID: string, bump: () => void) {
   if (syncedSessions.has(sessionID)) return
   syncedSessions.add(sessionID)
+  if (debugEnabled) syncState.set(sessionID, "pending")
   try {
     await context.data.session.sync(sessionID)
     bump()
     await context.data.session.message.sync(sessionID)
     bump()
+    if (debugEnabled) syncState.set(sessionID, "ok")
     lastSyncFailure = undefined
   } catch (error) {
+    if (debugEnabled) syncState.set(sessionID, "failed")
     const message = error instanceof Error ? error.message : String(error)
     if (message !== lastSyncFailure) {
       lastSyncFailure = message
@@ -170,6 +250,7 @@ function Status(props: {
   bump: () => void
   compact: () => boolean
   width: () => number
+  debug?: string
 }) {
   const [beat, setBeat] = createSignal(0)
   let lastGood: { view: GoodView; running: number } | undefined
@@ -185,6 +266,7 @@ function Status(props: {
       const view = panel(data, props.sessionID, props.width(), BODY_MAX_LINES)
       // Every running instance in scope: queue its sync so the bar fills once it lands (G16).
       const runningRows = props.sessionID ? collect(data, props.sessionID) : []
+      if (props.debug) debugDump(data, props.sessionID, props.debug)
       for (const row of runningRows) void syncSession(props.context, row.sessionID, props.bump)
       const running = runningRows.length
       lastFailure = undefined
@@ -235,8 +317,8 @@ function Status(props: {
                   <>
                     <br />
                     <Seg fg={rowColor(theme, row)}>{row.head}</Seg>
-                    <Seg fg={barColor(theme, row.filled)}>{FILL.repeat(row.filled)}</Seg>
-                    <Seg fg={theme.text.muted}>{EMPTY.repeat(BAR_CELLS - row.filled)}</Seg>
+                    <Seg fg={barColor(theme, row.filled)}>{BAR_GLYPH_FILLED.repeat(row.filled)}</Seg>
+                    <Seg fg={theme.text.muted}>{BAR_GLYPH_EMPTY.repeat(BAR_CELLS - row.filled)}</Seg>
                   </>
                 )}
               </For>
@@ -318,6 +400,16 @@ export default Plugin.define({
   id: "opencode-subagent-model.tui",
   setup(context) {
     const options = readOptions(context)
+    debugEnabled = options.debug !== undefined
+    // Temporary diagnostic: the agent ids the host reports, dumped once.
+    if (options.debug) {
+      try {
+        const agentIDs = (sources(context).agents ?? []).map((entry) => entry.id)
+        debugLine(options.debug, { at: Date.now(), agents: agentIDs })
+      } catch {
+        // Silent on purpose: a diagnostic failure must not block setup.
+      }
+    }
     const [settings, updateSettings] = context.storage.store("opencode-subagent-model", {
       initial: { compact: false },
     })
@@ -371,6 +463,7 @@ export default Plugin.define({
         bump={bump}
         compact={compact}
         width={() => options.width}
+        debug={options.debug}
       />
     ))
 

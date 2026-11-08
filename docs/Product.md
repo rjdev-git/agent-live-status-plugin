@@ -41,7 +41,7 @@ currently viewed (other tabs' sessions are invisible here).
 - Indented under the role with tree glyphs `├` (more follow) and `└` (last).
   Unnumbered.
 - Fields in order: session title (max 8 cells, clipped with `…`), model
-  short label (max 13 cells via R5's split rule), speed bar (5 boxes, R6).
+  short label (max 12 cells via R5's split rule), speed bar (5 boxes, R6).
 - Colour: same rule as the working role row.
 - A succeeded instance disappears immediately: its row collapses back into
   the role row. A failed or interrupted instance does not — it follows
@@ -68,12 +68,12 @@ last 5 columns, aligned across rows.
 - Model label rule: when `Provider/Model` overflows its field, the provider
   keeps at most half of it, and the model name gets whatever remains; the
   whole label clips to `field - 1` characters plus `…`.
-- Boxes are tight: no gap cell between the box glyphs and the model field,
-  on either row shape. The freed cell belongs to the row's model field.
-- Role field: number 3 + name 9 + space 1 + model (width - 18, capped at 20)
-  + boxes 5. At the default width the model field is 17 cells.
+- Exactly one separator cell sits between the model field and the first
+  box glyph on both row shapes (A.5; between box glyphs there is none).
+- Role field: number 3 + name 9 + space 1 + model (width - 19, capped at 20)
+  + separator 1 + boxes 5. At the default width the model field is 16 cells.
 - Instance field: indent 3 (space, glyph, space) + title 8 + space 1 + model
-  13 + padding to align + boxes 5.
+  12 + padding to align + separator 1 + boxes 5.
 - `One constant, one meaning`: each field has its own named constant; one
   constant never serves a second field.
 

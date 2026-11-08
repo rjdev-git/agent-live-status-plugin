@@ -224,6 +224,12 @@ export function collect(sources: Sources, sessionID?: string): RunningSubagent[]
 /** Speed boxes on every row, filled or empty. */
 export const BAR_CELLS = 5
 
+/** Filled box glyph, one cell advance, flush against its neighbour (C30). */
+export const BAR_GLYPH_FILLED = "▓"
+
+/** Empty box glyph, one cell advance, flush against its neighbour (C31). */
+export const BAR_GLYPH_EMPTY = "░"
+
 /** Row width in cells when the width option is absent. */
 export const DEFAULT_WIDTH = 35
 
@@ -245,8 +251,11 @@ export const ROLE_NAME_GAP_CELLS = 1
 /** Hard cap on the role model label text, so a wide sidebar does not stretch it. */
 export const ROLE_MODEL_MAX_CELLS = 20
 
-/** Every role row cell except the model column: number, name, gap, boxes. */
-export const ROLE_FIXED_CELLS = 18
+/** Every role row cell except the model column: number, name, gap, separator, boxes. */
+export const ROLE_FIXED_CELLS = 19
+
+/** One separator cell between the role model field and the first box glyph. */
+export const ROLE_BAR_GAP_CELLS = 1
 
 /** Instance indent: space, tree glyph, space. */
 export const INSTANCE_INDENT_CELLS = 3
@@ -258,10 +267,13 @@ export const INSTANCE_TITLE_CELLS = 8
 export const INSTANCE_TITLE_GAP_CELLS = 1
 
 /** Instance model labels are clipped to this many cells. */
-export const INSTANCE_MODEL_CELLS = 13
+export const INSTANCE_MODEL_CELLS = 12
 
-/** Every instance row cell except the model column: indent, title, gap, boxes. */
-export const INSTANCE_FIXED_CELLS = 17
+/** Every instance row cell except the model column: indent, title, gap, separator, boxes. */
+export const INSTANCE_FIXED_CELLS = 18
+
+/** One separator cell between the instance model field and the first box glyph. */
+export const INSTANCE_BAR_GAP_CELLS = 1
 
 /** Tokens per second that fills one box. */
 export const TPS_PER_BOX = 20
@@ -406,7 +418,7 @@ function roleHead(index: number, name: string, model: string, width: number): st
   const modelField = model
     ? padCells(fitModel(model, Math.min(column, ROLE_MODEL_MAX_CELLS)), column)
     : " ".repeat(column)
-  return `${number}.${agent}${" ".repeat(ROLE_NAME_GAP_CELLS)}${modelField}`
+  return `${number}.${agent}${" ".repeat(ROLE_NAME_GAP_CELLS)}${modelField}${" ".repeat(ROLE_BAR_GAP_CELLS)}`
 }
 
 /** Instance row text: indent, title, and the model column. */
@@ -414,7 +426,7 @@ function instanceHead(glyph: "├" | "└", title: string, model: string, width:
   const column = instanceColumn(width)
   const shownTitle = padCells(clip(cleanTitle(title), INSTANCE_TITLE_CELLS), INSTANCE_TITLE_CELLS)
   const modelField = padCells(fitModel(model, Math.min(column, INSTANCE_MODEL_CELLS)), column)
-  return ` ${glyph} ${shownTitle}${" ".repeat(INSTANCE_TITLE_GAP_CELLS)}${modelField}`
+  return ` ${glyph} ${shownTitle}${" ".repeat(INSTANCE_TITLE_GAP_CELLS)}${modelField}${" ".repeat(INSTANCE_BAR_GAP_CELLS)}`
 }
 
 export type RowState = "idle" | "active" | "grace"

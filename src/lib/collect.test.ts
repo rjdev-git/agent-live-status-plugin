@@ -2,6 +2,8 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import {
   BAR_CELLS,
+  BAR_GLYPH_EMPTY,
+  BAR_GLYPH_FILLED,
   BODY_MAX_LINES,
   DEFAULT_WIDTH,
   ELLIPSIS_CELLS,
@@ -9,6 +11,7 @@ import {
   FILL_MIN_BOXES,
   GRACE_MS,
   GRACE_TICK_MS,
+  INSTANCE_BAR_GAP_CELLS,
   INSTANCE_FIXED_CELLS,
   INSTANCE_INDENT_CELLS,
   INSTANCE_MODEL_CELLS,
@@ -17,6 +20,7 @@ import {
   PICKER_AGENT_CELLS,
   PICKER_MODEL_CELLS,
   PROVIDER_MAX_SHARE,
+  ROLE_BAR_GAP_CELLS,
   ROLE_FIXED_CELLS,
   ROLE_MODEL_MAX_CELLS,
   ROLE_NAME_CELLS,
@@ -254,7 +258,7 @@ test("fitModel gives the provider half at most and the model the rest", () => {
   assert.equal(fitModel("NoSlashModelNameLongerThanBudget", 16), "NoSlashModelNam…")
 })
 
-test("instance rows show an 8-cell title and a 13-cell model", () => {
+test("instance rows show an 8-cell title and a 12-cell model", () => {
   const NOW = 1_000_000
   const sources: Sources = {
     sessions: fakeSessions(
@@ -278,7 +282,7 @@ test("instance rows show an 8-cell title and a 13-cell model", () => {
 
   const view = panel(sources, "root", 35, 10, NOW)
   const instance = view.rows.find((row) => row.head.startsWith(" └"))!
-  assert.equal(instance.head, " └ Inspect… Deep…/DeepSe…     ")
+  assert.equal(instance.head, " └ Inspect… Deep…/DeepS…      ")
   assert.equal(cellWidth(instance.head) + 5, 35)
 })
 
@@ -506,15 +510,16 @@ test("C6 ROLE_NAME_GAP_CELLS = 1 keeps the gap column clear", () => {
 
 test("C7 ROLE_MODEL_MAX_CELLS = 20 caps the role label text", () => {
   assert.equal(ROLE_MODEL_MAX_CELLS, 20)
-  const twenty = panel(roleWithModel("P", "123456789012345678"), undefined, 39, BODY_MAX_LINES, 0)
+  // Width 40: the role column is 21 cells but the label text stops at 20.
+  const twenty = panel(roleWithModel("P", "123456789012345678"), undefined, 40, BODY_MAX_LINES, 0)
   assert.equal(twenty.rows[0].head.slice(13, 33), "P/123456789012345678")
 
-  const twentyOne = panel(roleWithModel("P", "1234567890123456789"), undefined, 39, BODY_MAX_LINES, 0)
+  const twentyOne = panel(roleWithModel("P", "1234567890123456789"), undefined, 40, BODY_MAX_LINES, 0)
   assert.equal(twentyOne.rows[0].head.slice(13, 33), "P/12345678901234567…")
 })
 
-test("C8 ROLE_FIXED_CELLS = 18 leaves the model column and raises narrow widths", () => {
-  assert.equal(ROLE_FIXED_CELLS, 18)
+test("C8 ROLE_FIXED_CELLS = 19 leaves the model column and raises narrow widths", () => {
+  assert.equal(ROLE_FIXED_CELLS, 19)
   const at19 = panel(rootSources([], [agent("a", "A")]), undefined, 19, BODY_MAX_LINES, 0)
   assert.equal(cellWidth(at19.rows[0].head), 14)
   assert.equal(cellWidth(at19.rows[0].head.slice(13)), 1)
@@ -597,11 +602,11 @@ test("C12 INSTANCE_TITLE_GAP_CELLS = 1 after the title field", () => {
   assert.equal(view.rows[1].head.slice(3, 11), "abcdefg…")
 })
 
-test("C13 INSTANCE_MODEL_CELLS = 13 uses the split rule", () => {
-  assert.equal(INSTANCE_MODEL_CELLS, 13)
-  assert.equal(fitModel("OpenCode/Kimi K3.1 Pro", 13), "Open…/Kimi K…")
-  assert.equal(clip("OpenCode/Kimi K3.1 Pro", 13), "OpenCode/Kim…")
-  assert.notEqual(fitModel("OpenCode/Kimi K3.1 Pro", 13), clip("OpenCode/Kimi K3.1 Pro", 13))
+test("C13 INSTANCE_MODEL_CELLS = 12 uses the split rule", () => {
+  assert.equal(INSTANCE_MODEL_CELLS, 12)
+  assert.equal(fitModel("OpenCode/Kimi K3.1 Pro", 12), "Open…/Kimi …")
+  assert.equal(clip("OpenCode/Kimi K3.1 Pro", 12), "OpenCode/Ki…")
+  assert.notEqual(fitModel("OpenCode/Kimi K3.1 Pro", 12), clip("OpenCode/Kimi K3.1 Pro", 12))
 
   const sources: Sources = {
     sessions: fakeSessions(
@@ -623,12 +628,12 @@ test("C13 INSTANCE_MODEL_CELLS = 13 uses the split rule", () => {
     providers: [{ id: "opencode", name: "OpenCode" }],
   }
   const view = panel(sources, "root", 35, BODY_MAX_LINES, 0)
-  assert.equal(view.rows[1].head.slice(12, 30), "Open…/Kimi K…     ")
+  assert.equal(view.rows[1].head.slice(12, 30), "Open…/Kimi …      ")
   assert.equal(cellWidth(view.rows[1].head.slice(12, 30)), 18)
 })
 
-test("C14 INSTANCE_FIXED_CELLS = 17 leaves the model column", () => {
-  assert.equal(INSTANCE_FIXED_CELLS, 17)
+test("C14 INSTANCE_FIXED_CELLS = 18 leaves the model column", () => {
+  assert.equal(INSTANCE_FIXED_CELLS, 18)
   const role = runningRole("aa", "Alpha", 1, 100)
   const wide = panel(rootSources(role.sessions, [role.agent], role.running), "root", 35, BODY_MAX_LINES, 0)
   assert.equal(cellWidth(wide.rows[1].head.slice(12, 30)), 18)
@@ -638,46 +643,92 @@ test("C14 INSTANCE_FIXED_CELLS = 17 leaves the model column", () => {
   assert.equal(cellWidth(narrow.rows[1].head.slice(12, 14)), 2)
 })
 
-test("C15 tight boxes: the model column ends where the boxes start", () => {
-  const roleSources: Sources = {
-    sessions: fakeSessions([{ id: "root" }]),
-    agents: [agent("a", "A", { model: { id: "grok47f", providerID: "go" } })],
-    models: [{ id: "grok47f", modelID: "grok47f", providerID: "go", name: "Grok 4.7 Flash" }],
-    providers: [{ id: "go", name: "OpenCode Go" }],
-  }
-  const roleHead = panel(roleSources, undefined, 35, BODY_MAX_LINES, 0).rows[0].head
-  assert.equal(roleHead.slice(13, 30), "Go/Grok 4.7 Flash")
-  assert.equal(cellWidth(roleHead.slice(13, 30)), 17)
-  // A gap cell would shrink the column to 16 and clip the label.
-  assert.notEqual(roleHead.slice(13, 30), "Go/Grok 4.7 Fla…")
+test("C15 one separator cell sits between the model column and the boxes", () => {
+  assert.equal(ROLE_BAR_GAP_CELLS, 1)
+  assert.equal(INSTANCE_BAR_GAP_CELLS, 1)
 
-  const instanceSources: Sources = {
-    sessions: fakeSessions(
-      [
-        { id: "root" },
-        {
-          id: "g",
-          parentID: "root",
-          agent: "a",
-          title: "x",
-          model: { id: "grok471", providerID: "go" },
-          time: { created: 100 },
-        },
-      ],
-      ["g"],
-    ),
-    agents: [agent("a", "A")],
-    models: [{ id: "grok471", modelID: "grok471", providerID: "go", name: "Grok 4.7.1" }],
-    providers: [{ id: "go", name: "OpenCode Go" }],
-  }
-  const instanceHead = panel(instanceSources, "root", 35, BODY_MAX_LINES, 0).rows[1].head
-  assert.equal(instanceHead.slice(12, 30), "Go/Grok 4.7.1     ")
-  assert.equal(instanceHead.slice(12, 25), "Go/Grok 4.7.1")
-  // A gap cell would shrink the text budget to 12 and clip the label.
-  assert.notEqual(instanceHead.slice(12, 25), "Go/Grok 4.7…")
+  const roleHead = (id: string, name: string) =>
+    panel(
+      {
+        sessions: fakeSessions([{ id: "root" }]),
+        agents: [agent("explore", "explore", { model: { id, providerID: "go" } })],
+        models: [{ id, modelID: id, providerID: "go", name }],
+        providers: [{ id: "go", name: "OpenCode Go" }],
+      },
+      undefined,
+      35,
+      BODY_MAX_LINES,
+      0,
+    ).rows[0].head
+
+  // Fits: an 11-cell label leaves 5 pad cells in the 16-cell column, then the
+  // separator, so the head ends with 6 spaces.
+  assert.equal(roleHead("grok47", "Grok 4.7"), " 1.explore   Go/Grok 4.7      ")
+  assert.equal(cellWidth(roleHead("grok47", "Grok 4.7")), 30)
+  // A 16-cell label fills the column; the separator is the 30th cell.
+  assert.equal(roleHead("kimi", "Kimi K3.1 Pro"), " 1.explore   Go/Kimi K3.1 Pro ")
+  assert.equal(cellWidth(roleHead("kimi", "Kimi K3.1 Pro")), 30)
+
+  // Does not fit: a 17-cell label clips to 16 then takes the separator.
+  assert.equal(roleHead("grok47f", "Grok 4.7 Flash"), " 1.explore   Go/Grok 4.7 Fla… ")
+  assert.equal(cellWidth(roleHead("grok47f", "Grok 4.7 Flash")), 30)
+  // A.3's no-separator column of 17 keeps the label whole and must fail.
+  assert.notEqual(roleHead("grok47f", "Grok 4.7 Flash"), " 1.explore   Go/Grok 4.7 Flash")
+  assert.equal(cellWidth(" 1.explore   Go/Grok 4.7 Flash"), 30)
+  // A model field that eats the separator renders a 29-cell head and must
+  // fail the 6-space pin.
+  assert.notEqual(roleHead("grok47f", "Grok 4.7 Flash"), " 1.explore   Go/Grok 4.7     ")
+  assert.equal(cellWidth(" 1.explore   Go/Grok 4.7     "), 29)
+
+  const instanceHead = (id: string, name: string) =>
+    panel(
+      {
+        sessions: fakeSessions(
+          [
+            { id: "root" },
+            {
+              id: "g",
+              parentID: "root",
+              agent: "a",
+              title: "Inspect modules",
+              model: { id, providerID: "go" },
+              time: { created: 100 },
+            },
+            {
+              id: "g2",
+              parentID: "root",
+              agent: "a",
+              title: "Inspect modules",
+              model: { id, providerID: "go" },
+              time: { created: 200 },
+            },
+          ],
+          ["g", "g2"],
+        ),
+        agents: [agent("a", "A")],
+        models: [{ id, modelID: id, providerID: "go", name }],
+        providers: [{ id: "go", name: "OpenCode Go" }],
+      },
+      "root",
+      35,
+      BODY_MAX_LINES,
+      0,
+    ).rows[1].head
+
+  // Fits: 12-cell text + 5 pad + 1 separator in the 17-cell column.
+  assert.equal(instanceHead("grok47", "Grok 4.7"), " ├ Inspect… Go/Grok 4.7       ")
+  assert.equal(cellWidth(instanceHead("grok47", "Grok 4.7")), 30)
+  assert.equal(instanceHead("kimi", "Kimi K3.1"), " ├ Inspect… Go/Kimi K3.1      ")
+  assert.equal(cellWidth(instanceHead("kimi", "Kimi K3.1")), 30)
+  // Does not fit: a 13-cell label clips to 12, then 5 pad + separator.
+  assert.equal(instanceHead("grok471", "Grok 4.7.1"), " ├ Inspect… Go/Grok 4.7…      ")
+  assert.equal(cellWidth(instanceHead("grok471", "Grok 4.7.1")), 30)
+  // A.3's 13-cell text keeps the label whole and must fail.
+  assert.notEqual(instanceHead("grok471", "Grok 4.7.1"), " ├ Inspect… Go/Grok 4.7.1     ")
+  assert.equal(cellWidth(" ├ Inspect… Go/Grok 4.7.1     "), 30)
 })
 
-test("F21 above width 35 the instance text stays 13 cells and the column pads", () => {
+test("F21 above width 35 the instance text stays 12 cells and the column pads", () => {
   const at = (id: string, modelName: string) => {
     const sources: Sources = {
       sessions: fakeSessions(
@@ -701,27 +752,25 @@ test("F21 above width 35 the instance text stays 13 cells and the column pads", 
     return panel(sources, "root", 39, BODY_MAX_LINES, 0).rows[1].head
   }
 
-  // Width 39: instance column 22, but the text cap stays 13, so the other 9
-  // cells are padding and the boxes stay tight at column W-4 (F21, C13/C14).
-  const head = at("grok471", "Grok 4.7.1")
-  assert.equal(head, " └ x        Go/Grok 4.7.1         ")
+  // Width 39: instance column 21, but the text cap stays 12, so the other 9
+  // cells are padding and the separator precedes the boxes (F21, C13/C14).
+  const head = at("kimi", "Kimi K3.1")
+  assert.equal(head, " └ x        Go/Kimi K3.1          ")
   assert.equal(cellWidth(head), 39 - BAR_CELLS)
   assert.equal(head.length, 39 - BAR_CELLS)
-  assert.equal(head.slice(12, 25), "Go/Grok 4.7.1")
-  assert.equal(head.slice(25, 39 - BAR_CELLS), " ".repeat(9))
-  assert.equal(head.slice(25, 39 - BAR_CELLS).trim(), "")
+  assert.equal(head.slice(12, 24), "Go/Kimi K3.1")
+  assert.equal(head.slice(24, 33), " ".repeat(9))
+  assert.equal(head.slice(33, 34), " ")
   assert.equal(cellWidth(head) + BAR_CELLS, 39)
 
-  // Does not fit the 13-cell text cap: the 22-cell column has room, but the
-  // text still clips at 13. A wider-text implementation (column-sized text)
-  // would keep the 17-cell label whole, and a short column (12 cells) would
-  // clip one cell earlier.
-  const long = at("grok471pro", "Grok 4.7.1 Pro")
-  assert.equal(long.slice(12, 25), "Go/Grok 4.7.…")
-  assert.notEqual(long.slice(12, 25), "Go/Grok 4.7.1")
-  assert.notEqual(long.slice(12, 25), "Go/Grok 4.7…")
+  // Does not fit the 12-cell text cap: the 21-cell column has room, but the
+  // text still clips at 12. A wider-text implementation (column-sized text)
+  // would keep the 13-cell label whole.
+  const long = at("grok471", "Grok 4.7.1")
+  assert.equal(long.slice(12, 24), "Go/Grok 4.7…")
+  assert.notEqual(long.slice(12, 24), "Go/Grok 4.7.1")
   assert.equal(cellWidth(long), 39 - BAR_CELLS)
-  assert.equal(long.slice(25, 39 - BAR_CELLS), " ".repeat(9))
+  assert.equal(long.slice(24, 33), " ".repeat(9))
   assert.equal(cellWidth(long) + BAR_CELLS, 39)
 })
 
@@ -791,6 +840,34 @@ test("C21 barTone is single green or muted", () => {
   }
 })
 
+test("C30/C31 bar glyphs are the pinned pair, one cell each and flush", () => {
+  const bar = (filled: number) =>
+    BAR_GLYPH_FILLED.repeat(filled) + BAR_GLYPH_EMPTY.repeat(BAR_CELLS - filled)
+
+  // Exact constants, not just the composed strings.
+  assert.equal(BAR_GLYPH_FILLED, "▓")
+  assert.equal(BAR_GLYPH_EMPTY, "░")
+  assert.equal(cellWidth(BAR_GLYPH_FILLED), 1)
+  assert.equal(cellWidth(BAR_GLYPH_EMPTY), 1)
+
+  assert.equal(bar(5), "▓▓▓▓▓")
+  assert.equal(bar(0), "░░░░░")
+  assert.equal(bar(4), "▓▓▓▓░")
+  assert.equal(cellWidth(bar(5)), BAR_CELLS)
+  assert.equal(cellWidth(bar(0)), BAR_CELLS)
+  assert.equal(cellWidth(bar(4)), BAR_CELLS)
+
+  // The fits side: a run of zero glyphs is empty, no leftover literal.
+  assert.equal(BAR_GLYPH_FILLED.repeat(0), "")
+  assert.equal(BAR_GLYPH_EMPTY.repeat(0), "")
+
+  // The retired pair (U+25AE/U+25AF) must not appear anywhere in the bar.
+  assert.notEqual(BAR_GLYPH_FILLED, "▮")
+  assert.notEqual(BAR_GLYPH_EMPTY, "▯")
+  assert.equal(bar(5).includes("▮"), false)
+  assert.equal(bar(0).includes("▯"), false)
+})
+
 test("C22 GRACE_MS = 30000 is a half-open window", () => {
   assert.equal(GRACE_MS, 30_000)
   const NOW = 1_000_000
@@ -844,8 +921,10 @@ test("C25 ELLIPSIS_CELLS = 1 is reserved by every clip", () => {
 
 test("C26 PROVIDER_MAX_SHARE = 1/2 caps the provider side", () => {
   assert.equal(PROVIDER_MAX_SHARE, 1 / 2)
-  assert.equal(fitModel("Go/MiniMax M3.1 Flash", 16), "Go/MiniMax M3.1…")
-  assert.equal(fitModel("SomeVeryBigName/Model", 16), "SomeVe…/Model")
+  // Budget 15: provider `Go` (2 cells) fits inside the 6-cell provider text cap.
+  assert.equal(fitModel("Go/Kimi K3.1 Pro", 15), "Go/Kimi K3.1 P…")
+  // Provider text 6 cells + `/` = 7 = floor(15 / 2).
+  assert.equal(fitModel("SomeVeryBigName/Model", 15), "SomeV…/Model")
 })
 
 test("C27 UNKNOWN_MODEL is the last resolution fallback", () => {
@@ -855,10 +934,13 @@ test("C27 UNKNOWN_MODEL is the last resolution fallback", () => {
 
   const unknown = (width: number) =>
     panel(rootSources([child("u", "aa", 100)], [agent("aa", "Alpha")], ["u"]), "root", width, BODY_MAX_LINES, 0)
-  // Width 30 leaves a 13-cell instance column, so the whole text fits.
-  assert.equal(unknown(30).rows[1].head.slice(12, 25), "unknown model")
-  // Width 29 leaves a 12-cell column, so it clips.
-  assert.equal(unknown(29).rows[1].head.slice(12, 24), "unknown mod…")
+  // Width 30 leaves a 12-cell instance column: the 13-cell text clips.
+  assert.equal(unknown(30).rows[1].head.slice(12, 24), "unknown mod…")
+  // Width 29 leaves an 11-cell column, so the column binds.
+  assert.equal(unknown(29).rows[1].head.slice(12, 23), "unknown mo…")
+  // Width 39 leaves a 21-cell column, but the text cap stays 12.
+  assert.equal(unknown(39).rows[1].head.slice(12, 24), "unknown mod…")
+  assert.notEqual(unknown(39).rows[1].head.slice(12, 24), UNKNOWN_MODEL)
   assert.equal(clip(UNKNOWN_MODEL, 13), "unknown model")
   assert.equal(clip(UNKNOWN_MODEL, 12), "unknown mod…")
 })
@@ -1121,6 +1203,30 @@ test("instance row at width 35 pads the model column", () => {
   const head = panel(sources, "root", 35, BODY_MAX_LINES, 0).rows[1].head
   assert.equal(head, " ├ Inspect… Go/Grok 4.7       ")
   assert.equal(cellWidth(head), 30)
+})
+
+test("speed bar follows the separator at width 35 (filled = 3)", () => {
+  const NOW = 1_000_000
+  const sources: Sources = {
+    sessions: fakeSessions(
+      [
+        { id: "root" },
+        { id: "i", parentID: "root", agent: "explore", title: "x", time: { created: NOW } },
+      ],
+      ["i"],
+      { i: [assistant(50, 0, 1_000)] },
+    ),
+    agents: [agent("explore", "explore", { model: { id: "kimi", providerID: "go" } })],
+    models: [{ id: "kimi", modelID: "kimi", providerID: "go", name: "Kimi K3.1 Pro" }],
+    providers: [{ id: "go", name: "OpenCode Go" }],
+  }
+  const bar = (filled: number) =>
+    BAR_GLYPH_FILLED.repeat(filled) + BAR_GLYPH_EMPTY.repeat(BAR_CELLS - filled)
+
+  const role = panel(sources, "root", 35, BODY_MAX_LINES, NOW).rows[0]
+  assert.equal(role.filled, 3)
+  assert.equal(role.head + bar(role.filled), " 1.explore   Go/Kimi K3.1 Pro ▓▓▓░░")
+  assert.equal(cellWidth(role.head + bar(role.filled)), 35)
 })
 
 test("title counts and compact count follow the view", () => {

@@ -1,6 +1,6 @@
 {
   "name": "opencode-subagent-model",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Shows the model used by currently running subagents in the OpenCode TUI",
   "type": "module",
   "scripts": {

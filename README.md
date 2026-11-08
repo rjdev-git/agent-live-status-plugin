@@ -26,13 +26,13 @@ A tree of agent roles. A role shows the agent definition; every running instance
 
 ```text
 Project Team Members 1/5
- 1.explore   Go/Kimi K3.1 Pro ▮▮▮▯▯
- ├ Inspect…  Go/Grok 4.7     ▮▮▮▮▯
- └ Audit r…  Go/MiniMax M3.… ▮▯▯▯▯
- 2.reviewer                  ▯▯▯▯▯
- 3.qa                        ▯▯▯▯▯
- 4.writer                    ▯▯▯▯▯
- 5.researcher                ▯▯▯▯▯
+ 1.explore   Go/Kimi K3.1 Pro ▓▓▓░░
+ ├ Inspect… Go/Grok 4.7       ▓▓▓▓░
+ └ Audit r… Go/MiniMax …      ▓░░░░
+ 2.reviewer                   ░░░░░
+ 3.qa                         ░░░░░
+ 4.writer                     ░░░░░
+ 5.research…                  ░░░░░
 ```
 
 States:
@@ -50,7 +50,7 @@ The title counts roles currently working over roles known. The body caps at 10 l
 
 Role rows are numbered (` 1.`, `20.` reserved), instance rows are unnumbered. Both row shapes fill exactly `width` cells, so the bars align vertically.
 
-The model label clips when the row is too tight: the provider keeps at most half of the budget, and the model name takes the rest. The boxes sit tight against the model column — no gap cell — so the freed cell belongs to the model field. Boxes show throughput: `filled = round(tps / 20)`, so 20 tokens/sec fills one box and 100 fills all five. Filled boxes are always green, empty boxes are muted, and an unknown speed is five muted empty boxes. A role-without-instance row always shows empty boxes.
+The model label clips when the row is too tight: the provider keeps at most half of the budget, and the model name takes the rest. One separator cell sits between the model column and the boxes; the boxes are tight against each other. Boxes show throughput: `filled = round(tps / 20)`, so 20 tokens/sec fills one box and 100 fills all five. Filled boxes are always green, empty boxes are muted, and an unknown speed is five muted empty boxes. A role-without-instance row always shows empty boxes.
 
 Compact mode keeps the old summary:
 
@@ -150,6 +150,12 @@ Add the plugin in `opencode.jsonc`:
 | `bind` | `string` | unset | Keybind for the subagent picker |
 | `compact` | `boolean` | unset | Forces compact mode (`sub N`) |
 | `width` | `number` | `35` | Cell budget for a sidebar row; the model label clips to fit |
+
+The temporary `debug` option is a diagnostic aid for the current live-data
+investigation: set `debug: true` to append a JSONL record per recompute to
+`/tmp/opencode/subagent-model-debug.jsonl`, or pass a string path to
+override that location. It is not part of the requirements contract and will
+be removed once the investigation ends.
 
 ## Installation
 
