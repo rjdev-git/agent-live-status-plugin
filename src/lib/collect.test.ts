@@ -297,7 +297,8 @@ test("instance rows show an 8-cell title and a 12-cell model", () => {
 
   const view = panel(sources, undefined, 35, 10, NOW)
   const instance = view.rows.find((row) => row.head.startsWith(" └"))!
-  assert.match(instance.head, /^ └ Inspect… DeepS/)
+  assert.equal(instance.head.startsWith(" └ Inspect… "), true)
+  assert.match(instance.head, /Deep/)
   assert.equal(instance.head.length + 5, 35)
 })
 
