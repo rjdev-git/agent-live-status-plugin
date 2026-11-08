@@ -1,5 +1,5 @@
 ---
-description: "Designer for the opencode-subagent-model repo. Turns docs/Product.md requirements into docs/design.md. Use when a design document must be created or revised from requirements."
+description: "Designer for the subagent-live-status-plugin repo. Turns docs/Product.md requirements into docs/design.md. Use when a design document must be created or revised from requirements."
 mode: subagent
 model: opencode-go/deepseek-v4.1-flash
 ---

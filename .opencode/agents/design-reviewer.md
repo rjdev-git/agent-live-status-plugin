@@ -1,5 +1,5 @@
 ---
-description: "Design-reviewer for the opencode-subagent-model repo. Reviews docs/design.md strictly against docs/Product.md and reports findings only. Use after the Designer writes a design document."
+description: "Design-reviewer for the subagent-live-status-plugin repo. Reviews docs/design.md strictly against docs/Product.md and reports findings only. Use after the Designer writes a design document."
 mode: subagent
 model: opencode-go/glm-5.3-flash
 ---

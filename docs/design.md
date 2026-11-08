@@ -1,4 +1,4 @@
-# Design — opencode-subagent-model
+# Design — subagent-live-status-plugin
 
 Binding design for R1–R12 of `docs/Product.md`. `docs/Product.md` is the
 contract; this document is how the contract is realised. Precedence:
@@ -370,7 +370,7 @@ Design decisions:
 
 Design decisions:
 
-- Persistence: plugin storage under `opencode-subagent-model`, shape
+- Persistence: plugin storage under `subagent-live-status-plugin`, shape
   `{ compact: boolean }`, initial `{ compact: false }`.
 - Effective compact = configured `compact` when it is a boolean, else the
   stored flag.
@@ -512,7 +512,7 @@ host source at render time.
 | `context.data.location.model.list(location)` | model id, modelID, providerID, name | model display names only; `limit.context` is no longer read |
 | `context.data.location.provider.list(location)` | provider id, name | provider display names / short label last word |
 | `context.theme` | `text.base`, `text.muted`, `text.feedback.success/warning.base` | title, idle/active/grace text, filled boxes (success), empty boxes (muted) |
-| `context.storage.store("opencode-subagent-model")` | persisted `{ compact }` | R10 |
+| `context.storage.store("subagent-live-status-plugin")` | persisted `{ compact }` | R10 |
 | slot input `sessionID` | viewed session id | R3 tab scope; compact count scope |
 | `context.ui.router.current()` | current route | session context for opening a picked session; not used to scope the picker (F9) |
 | host events (`session.created/deleted/moved/forked/renamed/status/idle/agent.selected/model.selected/execution.started/succeeded/failed/interrupted`, plus `session.step.ended` and `session.message.content.updated`) | invalidation; on `session.created` and `session.execution.started` also a sync trigger, on `session.step.ended` a message re-sync trigger (known-fire: final `tokens` per completed assistant step), on `session.message.content.updated` a second re-sync trigger (delivery unverified; G16) | bump the view signal; load the instance session then its messages; re-read messages when an assistant step ends |

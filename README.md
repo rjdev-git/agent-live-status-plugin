@@ -1,6 +1,6 @@
-# opencode-subagent-model
+# subagent-live-status-plugin
 
-[![License: MIT](https://img.shields.io/github/license/chatteridiot-git/agent-live-status-plugin.svg?style=flat-square)](https://github.com/chatteridiot-git/agent-live-status-plugin/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/github/license/chatteridiot-git/subagent-live-status-plugin.svg?style=flat-square)](https://github.com/chatteridiot-git/subagent-live-status-plugin/blob/main/LICENSE)
 
 Live model status for running subagents in the OpenCode TUI.
 
@@ -8,9 +8,9 @@ This plugin shows which model each active subagent is using, so you can quickly 
 
 It is especially useful when you use different models for your main agent and subagents and want to confirm that each subagent is using the intended model from its configuration.
 
-Current version: `0.6.0`
+Current version: `0.7.0`
 
-This release ships five-step token/sec bands (5/10/20/50/100) for the speed bar, `▓`/`░` glyphs, and one separator cell between the model field and the bar.
+Project renamed to `subagent-live-status-plugin` (was `opencode-subagent-model`); plugin id, storage namespace, and command ids move with it — the persisted compact toggle resets once.
 
 ## Live preview
 
@@ -145,7 +145,7 @@ Add the plugin in `opencode.jsonc`:
 {
   "plugins": [
     {
-      "package": "opencode-subagent-model",
+      "package": "subagent-live-status-plugin",
       "options": {
         "placement": "sidebar.content",
         "bind": "ctrl+shift+s",
@@ -179,19 +179,19 @@ The plugin is discovered from the OpenCode plugin directories.
 Global config path:
 
 ```text
-~/.config/opencode/plugins/opencode-subagent-model/
+~/.config/opencode/plugins/subagent-live-status-plugin/
 ```
 
 Project-local path:
 
 ```text
-<project>/.opencode/plugins/opencode-subagent-model/
+<project>/.opencode/plugins/subagent-live-status-plugin/
 ```
 
 You can also symlink the plugin directory into place:
 
 ```sh
-ln -s /path/to/opencode-subagent-model ~/.config/opencode/plugins/opencode-subagent-model
+ln -s /path/to/subagent-live-status-plugin ~/.config/opencode/plugins/subagent-live-status-plugin
 ```
 
 After installation, reload the TUI with `/reload` or restart OpenCode.

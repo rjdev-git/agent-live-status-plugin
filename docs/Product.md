@@ -1,4 +1,4 @@
-# Product — opencode-subagent-model
+# Product — subagent-live-status-plugin
 
 Live subagent-model status for the OpenCode TUI: a panel shows the project's
 subagent team — which roles exist, which are working, on which model, and how

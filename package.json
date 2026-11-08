@@ -1,6 +1,6 @@
 {
-  "name": "opencode-subagent-model",
-  "version": "0.6.0",
+  "name": "subagent-live-status-plugin",
+  "version": "0.7.0",
   "description": "Shows the model used by currently running subagents in the OpenCode TUI",
   "type": "module",
   "scripts": {

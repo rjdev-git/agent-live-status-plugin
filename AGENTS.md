@@ -1,4 +1,4 @@
-# Project team charter — opencode-subagent-model
+# Project team charter — subagent-live-status-plugin
 
 This repo is built through a role pipeline. The rule survives sessions: the
 main agent is never the coder or the reviewer, and reviewers never fix.

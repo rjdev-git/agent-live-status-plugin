@@ -397,7 +397,7 @@ async function showDetails(context: Context, query?: string) {
 }
 
 export default Plugin.define({
-  id: "opencode-subagent-model.tui",
+  id: "subagent-live-status-plugin.tui",
   setup(context) {
     const options = readOptions(context)
     debugEnabled = options.debug !== undefined
@@ -410,7 +410,7 @@ export default Plugin.define({
         // Silent on purpose: a diagnostic failure must not block setup.
       }
     }
-    const [settings, updateSettings] = context.storage.store("opencode-subagent-model", {
+    const [settings, updateSettings] = context.storage.store("subagent-live-status-plugin", {
       initial: { compact: false },
     })
     const compact = () => options.compact ?? settings.compact
@@ -471,7 +471,7 @@ export default Plugin.define({
       mode: "global",
       commands: [
         {
-          id: "opencode-subagent-model.show",
+          id: "subagent-live-status-plugin.show",
           title: "Show running subagent models",
           group: "Subagents",
           bind: options.bind,
@@ -481,7 +481,7 @@ export default Plugin.define({
           run: (input) => showDetails(context, input),
         },
         {
-          id: "opencode-subagent-model.toggleCompact",
+          id: "subagent-live-status-plugin.toggleCompact",
           title: "Toggle compact subagent status",
           group: "Subagents",
           palette: true,
