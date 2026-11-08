@@ -8,7 +8,7 @@ This plugin shows which model each active subagent is using, so you can quickly 
 
 It is especially useful when you use different models for your main agent and subagents and want to confirm that each subagent is using the intended model from its configuration.
 
-Current version: `1.1.0`
+Current version: `1.2.0`
 
 Project renamed to `subagent-live-status-plugin` (was `opencode-subagent-model`); plugin id, storage namespace, and command ids move with it — the persisted compact toggle resets once.
 
@@ -56,7 +56,7 @@ The title counts roles currently working over roles known. The body caps at 10 l
 
 Role rows are numbered (` 1.`, `20.` reserved), instance rows are unnumbered. Both row shapes fill exactly `width` cells, so the bars align vertically.
 
-When the host reports the sidebar's width (pixels), the panel derives its row width from it: detected pixels divided by `cellPx`, rounded half-up, capped by the `width` option, floored at the same minimum as config mode. A live sidebar resize rebuilds the rows on the next render with no state side effects. On the detected path the row fields are proportional: the space after the number and before the separator+boxes (rest = width − 10) splits between the role name and the model — name gets 40% rounded up, model the remainder, floors of 6 and 4 cells; instance rows split title (capped at 8) and model the same way. Titles and names clip with `…` per the usual rules. When detection is unavailable (`prompt.footer` placement, sidebar closed or resizing, width not loaded), the configured `width` governs with the fixed fallback field arithmetic.
+Row width is measured at runtime, from your terminal itself — no config needed. In priority order: (1) the renderer's own layout tree knows the sidebar container's width in cells (authoritative); (2) if that read is ambiguous, device pixels reported by the terminal are divided by the renderer's cell columns; (3) as a last resort, the host's reported sidebar pixel width divided by 8. The configured `width` stays as the cap and as the fallback when every measurement fails, floored at the same minimum as config mode. A live sidebar resize (or terminal resize) rebuilds the rows on the next render with no state side effects. On the detected path the row fields are proportional: the space after the number and before the separator+boxes (rest = width − 10) splits between the role name and the model — name gets 40% rounded up, model the remainder, floors of 6 and 4 cells; instance rows split title (capped at 8) and model the same way. Titles and names clip with `…` per the usual rules — without a fixed 12/20-cell cap on the detected path, so labels use the whole field that the split gives them. When detection is unavailable (`prompt.footer` placement, sidebar closed, terminal without a pixel report), the configured `width` governs with the fixed fallback field arithmetic.
 
 The model label clips when the row is too tight: the provider keeps at most half of the budget, and the model name takes the rest. One separator cell sits between the model column and the boxes; the boxes are tight against each other. Boxes show throughput in bands: one box at 5–19.9 tokens/sec, two at 20–49.9, three at 50–69.9, four at 70–100, and five above 100 (strictly greater — 100.0 exactly stays in the four-box band); speeds below 5 fill none. Filled boxes are always green, empty boxes are muted, and an unknown speed is five muted empty boxes. A role-without-instance row always shows empty boxes.
 
@@ -172,7 +172,7 @@ Add the plugin in `opencode.jsonc`:
 | `bind` | `string` | unset | Keybind for the subagent picker |
 | `compact` | `boolean` | unset | Forces compact mode (`sub N`) |
 | `width` | `number` | `35` | Cell budget for a sidebar row; also the cap when width detection succeeds, and the fallback everywhere detection is unavailable |
-| `cellPx` | `number` | `8` | Pixels per terminal cell assumed for the row-width derivation from the host's reported sidebar width (tune when the panel over/under-fills; caveat: the reported width may include sidebar frame chrome) |
+| `cellPx` | `number` | `8` | Pixels-per-cell assumption for the LAST measurement rung only (when the terminal reports no pixel resolution); runtime measurement makes this moot on modern terminals |
 
 The `debug` option ships as a diagnostic aid for future investigations:
 `debug: true` enables it and appends a JSONL record per recompute to

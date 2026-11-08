@@ -63,10 +63,13 @@ import {
   resolveModel,
   roleSplit,
   rowWidth,
+  runtimeCellPx,
+  selectCells,
   speedTps,
   type AgentInfo,
   type MemberSet,
   type RunningSubagent,
+  type RuntimeMetrics,
   type SessionInfo,
   type SessionSource,
   type Sources,
@@ -2405,7 +2408,7 @@ test("C45 INSTANCE_MODEL_MIN_CELLS = 4 guards the model field", () => {
 })
 
 test("C46 detection is available only for an open, loaded, visible side region", () => {
-  assert.deepEqual(rowWidth(35, CELL_PX, SIDE_PROBE), { W: 35, dynamic: true })
+  assert.deepEqual(rowWidth(35, CELL_PX, SIDE_PROBE), { W: 35, dynamic: true, rung: 3 })
   assert.equal(detectedCells({ ...SIDE_PROBE, cssWidth: 260 }, CELL_PX), 33)
 
   const unavailable: Array<WidthProbe | undefined> = [
@@ -2426,10 +2429,10 @@ test("C46 detection is available only for an open, loaded, visible side region",
 test("C47 rowWidth caps by declared width and floors at 19", () => {
   const probe = (cssWidth: number): WidthProbe => ({ ...SIDE_PROBE, cssWidth })
   // Detection can only narrow, never widen.
-  assert.deepEqual(rowWidth(35, CELL_PX, probe(400)), { W: 35, dynamic: true })
-  assert.deepEqual(rowWidth(35, CELL_PX, probe(224)), { W: 28, dynamic: true })
+  assert.deepEqual(rowWidth(35, CELL_PX, probe(400)), { W: 35, dynamic: true, rung: 3 })
+  assert.deepEqual(rowWidth(35, CELL_PX, probe(224)), { W: 28, dynamic: true, rung: 3 })
   // A detected 12 is floored to 19 exactly as a configured 12 is.
-  assert.deepEqual(rowWidth(35, CELL_PX, probe(96)), { W: 19, dynamic: true })
+  assert.deepEqual(rowWidth(35, CELL_PX, probe(96)), { W: 19, dynamic: true, rung: 3 })
   assert.deepEqual(rowWidth(18, CELL_PX, undefined), { W: 19, dynamic: false })
   assert.deepEqual(rowWidth(35, CELL_PX, undefined), { W: 35, dynamic: false })
 })
@@ -2523,16 +2526,16 @@ test("T16 cap and narrowing (C47)", () => {
   const sources = goSources([], agents)
 
   const capped = rowWidth(35, CELL_PX, { ...SIDE_PROBE, cssWidth: 400 })
-  assert.deepEqual(capped, { W: 35, dynamic: true })
+  assert.deepEqual(capped, { W: 35, dynamic: true, rung: 3 })
   assert.equal(dynamicPanel(sources, undefined, capped.W).rows[0].head, " 1.explore    Go/Kimi K3.1 P… ")
 
   const wider = rowWidth(40, CELL_PX, { ...SIDE_PROBE, cssWidth: 400 })
-  assert.deepEqual(wider, { W: 40, dynamic: true })
+  assert.deepEqual(wider, { W: 40, dynamic: true, rung: 3 })
   assert.equal(dynamicPanel(sources, undefined, wider.W).rows[0].head, " 1.explore      Go/Kimi K3.1 Pro   ")
   assert.equal(cellWidth(dynamicPanel(sources, undefined, wider.W).rows[0].head), 35)
 
   const narrower = rowWidth(35, CELL_PX, { ...SIDE_PROBE, cssWidth: 224 })
-  assert.deepEqual(narrower, { W: 28, dynamic: true })
+  assert.deepEqual(narrower, { W: 28, dynamic: true, rung: 3 })
   assert.equal(dynamicPanel(sources, undefined, narrower.W).rows[0].head, " 1.explore Go/Kimi K3… ")
   assert.equal(cellWidth(dynamicPanel(sources, undefined, narrower.W).rows[0].head), 23)
 })
@@ -2730,3 +2733,312 @@ test("C5 dynamic twin: a 10-cell name renders whole in the N=10 field", () => {
   assert.equal(cellWidth(clipped), 30)
   assert.equal(clipped.slice(3, 13), "design-re…")
 })
+
+/* ------------------------------------------------------------------ */
+/* A.12 three-rung width: C51-C53 and scenarios T24-T25, exact values. */
+/* ------------------------------------------------------------------ */
+
+/** Rung 2's divisor: 1600 device pixels over 100 terminal columns. */
+const RUNG2_METRICS: RuntimeMetrics = {
+  resolutionWidth: 1600,
+  rendererColumns: 100,
+}
+
+test("C51 rung 1 accepts a strictly wider box and falls through on equality or overflow", () => {
+  const probe = { ...SIDE_PROBE, cssWidth: 280 }
+
+  // Fits: a strictly wider ancestor is the authoritative cell count.
+  assert.deepEqual(selectCells(probe, { layoutCells: 40 }, CELL_PX), { cells: 40, rung: 1 })
+  // The one-cell strict edge.
+  assert.deepEqual(
+    selectCells(probe, { layoutCells: 36, boxCells: 36, rowsCells: 35 }, CELL_PX),
+    { cells: 36, rung: 1 },
+  )
+
+  // Does not fit: equality is not authority; rows wider than the box. The host
+  // projects both to `layoutCells: undefined`, which falls to the next rung.
+  assert.deepEqual(
+    selectCells(probe, { layoutCells: undefined, boxCells: 35, rowsCells: 35 }, CELL_PX),
+    { cells: 35, rung: 3 },
+  )
+  assert.deepEqual(
+    selectCells(probe, { layoutCells: undefined, boxCells: 30, rowsCells: 35 }, CELL_PX),
+    { cells: 35, rung: 3 },
+  )
+
+  // A non-positive or non-finite ancestor width is never authority.
+  for (const layoutCells of [0, -4, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.deepEqual(
+      selectCells(probe, { layoutCells, boxCells: layoutCells, rowsCells: 35 }, CELL_PX),
+      { cells: 35, rung: 3 },
+      `layoutCells ${layoutCells}`,
+    )
+  }
+
+  // C47 carries the strict win into W and the record.
+  assert.deepEqual(
+    rowWidth(40, CELL_PX, probe, { layoutCells: 36, boxCells: 36, rowsCells: 35 }),
+    { W: 36, dynamic: true, rung: 1, accepted: 36 },
+  )
+})
+
+test("C52 runtimeCellPx is resolution pixels over renderer columns, both positive", () => {
+  // Fits: the divisor is measured, never assumed.
+  assert.equal(runtimeCellPx({ resolutionWidth: 1600, rendererColumns: 200 }), 8)
+  assert.equal(runtimeCellPx({ resolutionWidth: 1000, rendererColumns: 120 }), 1000 / 120)
+  assert.deepEqual(
+    selectCells(
+      { ...SIDE_PROBE, cssWidth: 280 },
+      { resolutionWidth: 1600, rendererColumns: 200 },
+      CELL_PX,
+    ),
+    { cells: 35, rung: 2 },
+  )
+  assert.deepEqual(
+    selectCells(
+      { ...SIDE_PROBE, cssWidth: 250 },
+      { resolutionWidth: 1000, rendererColumns: 120 },
+      CELL_PX,
+    ),
+    { cells: 30, rung: 2 },
+  )
+
+  // Does not fit: no metrics, no pixel resolution, a zero or non-finite side.
+  const unavailable: Array<RuntimeMetrics | undefined> = [
+    undefined,
+    {},
+    { resolutionWidth: undefined, rendererColumns: 100 },
+    { resolutionWidth: 1600, rendererColumns: 0 },
+    { resolutionWidth: 0, rendererColumns: 100 },
+    { resolutionWidth: Number.NaN, rendererColumns: 100 },
+    { resolutionWidth: 1600, rendererColumns: Number.NaN },
+    { resolutionWidth: Number.POSITIVE_INFINITY, rendererColumns: 100 },
+  ]
+  for (const metrics of unavailable) {
+    assert.equal(runtimeCellPx(metrics), undefined)
+    // Rung 2 skips; the css width still reaches rung 3.
+    assert.deepEqual(
+      selectCells({ ...SIDE_PROBE, cssWidth: 280 }, metrics, CELL_PX),
+      { cells: 35, rung: 3 },
+    )
+  }
+})
+
+test("C53 stable box keeps only a record written in this activation", () => {
+  const probe = { ...SIDE_PROBE, cssWidth: 360 }
+
+  // Fits: rows, box and the record agree; rung 1 keeps the adopted width and
+  // does not consult rung 2 even though it would say 23.
+  assert.deepEqual(
+    rowWidth(40, CELL_PX, probe, { boxCells: 40, rowsCells: 40, ...RUNG2_METRICS }, 40),
+    { W: 40, dynamic: true, rung: 1, accepted: 40 },
+  )
+  // The stable box reads `boxCells`, not `layoutCells`: no strict win needed.
+  assert.deepEqual(
+    rowWidth(40, CELL_PX, probe, { boxCells: 40, rowsCells: 40 }, 40),
+    { W: 40, dynamic: true, rung: 1, accepted: 40 },
+  )
+
+  // Does not fit: no record, a stale record, a narrower box, or failed gates.
+  const noRecord = rowWidth(40, CELL_PX, probe, {
+    boxCells: 40,
+    rowsCells: 40,
+    ...RUNG2_METRICS,
+  })
+  assert.deepEqual(noRecord, { W: 23, dynamic: true, rung: 2 })
+  assert.equal(noRecord.accepted, undefined)
+
+  const stale = rowWidth(40, CELL_PX, probe, {
+    boxCells: 40,
+    rowsCells: 40,
+    ...RUNG2_METRICS,
+  }, 35)
+  assert.deepEqual(stale, { W: 23, dynamic: true, rung: 2 })
+  assert.equal(stale.accepted, undefined)
+
+  const shrink = rowWidth(40, CELL_PX, probe, {
+    boxCells: 30,
+    rowsCells: 35,
+    ...RUNG2_METRICS,
+  }, 40)
+  assert.deepEqual(shrink, { W: 23, dynamic: true, rung: 2 })
+  assert.equal(shrink.accepted, undefined)
+
+  const closed = rowWidth(
+    40,
+    CELL_PX,
+    { ...probe, loaded: false },
+    { boxCells: 40, rowsCells: 40 },
+    40,
+  )
+  assert.deepEqual(closed, { W: 40, dynamic: false })
+  assert.equal(closed.accepted, undefined)
+})
+
+test("T24 rung 1 wins, then the cap, the floor, and the dampener (C51, C46, C47, C53)", () => {
+  const probe = { ...SIDE_PROBE, cssWidth: 360 }
+  const agents = [memberRole("coder", "explore")]
+  const sources = goSources([], agents)
+
+  // The slot box is 50, the configured width caps it at 40.
+  assert.deepEqual(selectCells(probe, { layoutCells: 50 }, CELL_PX), { cells: 50, rung: 1 })
+  assert.deepEqual(
+    rowWidth(40, CELL_PX, probe, { layoutCells: 50 }),
+    { W: 40, dynamic: true, rung: 1, accepted: 40 },
+  )
+  assert.equal(
+    dynamicPanel(sources, undefined, 40).rows[0].head,
+    " 1.explore      Go/Kimi K3.1 Pro   ",
+  )
+
+  // The strict edge: A.width 36 vs rows 35 is the smallest accepted ancestor.
+  assert.deepEqual(
+    rowWidth(40, CELL_PX, probe, { layoutCells: 36, boxCells: 36, rowsCells: 35 }),
+    { W: 36, dynamic: true, rung: 1, accepted: 36 },
+  )
+
+  // A narrower box narrows the row.
+  assert.deepEqual(
+    rowWidth(40, CELL_PX, probe, { layoutCells: 28 }),
+    { W: 28, dynamic: true, rung: 1, accepted: 28 },
+  )
+  assert.equal(
+    dynamicPanel(sources, undefined, 28).rows[0].head,
+    " 1.explore Go/Kimi K3… ",
+  )
+
+  // The floor adopts 19, and the record is the adopted width (19, not 12).
+  assert.deepEqual(
+    rowWidth(40, CELL_PX, probe, { layoutCells: 12 }),
+    { W: 19, dynamic: true, rung: 1, accepted: 19 },
+  )
+
+  // Dampener, two passes, same result: pass 1 wins rung 1 and records 40.
+  const pass1 = rowWidth(
+    40,
+    CELL_PX,
+    probe,
+    { layoutCells: 40, boxCells: 40, rowsCells: 35, ...RUNG2_METRICS },
+    undefined,
+  )
+  assert.deepEqual(pass1, { W: 40, dynamic: true, rung: 1, accepted: 40 })
+  // Pass 2: the box now equals the rows, so no strict win; the record keeps it.
+  const pass2 = rowWidth(
+    40,
+    CELL_PX,
+    probe,
+    { boxCells: 40, rowsCells: 40, ...RUNG2_METRICS },
+    pass1.accepted,
+  )
+  assert.deepEqual(pass2, { W: 40, dynamic: true, rung: 1, accepted: 40 })
+
+  // A stale record (not the rows' width) falls to rung 2 and clears.
+  const stale = rowWidth(
+    40,
+    CELL_PX,
+    probe,
+    { boxCells: 40, rowsCells: 40, ...RUNG2_METRICS },
+    35,
+  )
+  assert.deepEqual(stale, { W: 23, dynamic: true, rung: 2 })
+  assert.equal(stale.accepted, undefined)
+
+  // Shrink clears: a narrower box never wins and never keeps the record.
+  const shrink = rowWidth(
+    40,
+    CELL_PX,
+    probe,
+    { boxCells: 30, rowsCells: 35, ...RUNG2_METRICS },
+    40,
+  )
+  assert.deepEqual(shrink, { W: 23, dynamic: true, rung: 2 })
+  assert.equal(shrink.accepted, undefined)
+
+  // Equality without a record invents nothing: it falls to rung 2.
+  const equalNoRecord = rowWidth(
+    40,
+    CELL_PX,
+    probe,
+    { boxCells: 35, rowsCells: 35, ...RUNG2_METRICS },
+    undefined,
+  )
+  assert.deepEqual(equalNoRecord, { W: 23, dynamic: true, rung: 2 })
+  assert.equal(equalNoRecord.accepted, undefined)
+
+  // Provenance: `rowsCells` is P.width, never A.width. Rows shrank to 35 in an
+  // unchanged 40-cell box; an implementation reading rowsCells from A.width
+  // would see a stable box and wrongly keep 40.
+  const rowsShrank = rowWidth(
+    40,
+    CELL_PX,
+    probe,
+    { boxCells: 40, rowsCells: 35, ...RUNG2_METRICS },
+    40,
+  )
+  assert.deepEqual(rowsShrank, { W: 23, dynamic: true, rung: 2 })
+  assert.equal(rowsShrank.accepted, undefined)
+
+  // Ambiguity falls through to rung 3 with the T15 probe.
+  assert.deepEqual(
+    selectCells(SIDE_PROBE, { layoutCells: undefined, boxCells: 30, rowsCells: 35 }, CELL_PX),
+    { cells: 35, rung: 3 },
+  )
+  assert.deepEqual(
+    rowWidth(40, CELL_PX, SIDE_PROBE, { boxCells: 30, rowsCells: 35 }),
+    { W: 35, dynamic: true, rung: 3 },
+  )
+  assert.equal(
+    dynamicPanel(sources, undefined, 35).rows[0].head,
+    " 1.explore    Go/Kimi K3.1 P… ",
+  )
+
+  // Rung 1 is asked before rung 2 at the same input.
+  assert.deepEqual(
+    selectCells(
+      { ...SIDE_PROBE, cssWidth: 280 },
+      { layoutCells: 40, resolutionWidth: 1600, rendererColumns: 200 },
+      CELL_PX,
+    ),
+    { cells: 40, rung: 1 },
+  )
+})
+
+test("T25 rung 2 versus rung 3, and which rung reads the option (C52, C46, C37)", () => {
+  const probe = { ...SIDE_PROBE, cssWidth: 360 }
+
+  // 360 / 16 = 22.5 rounds half-up to 23.
+  assert.deepEqual(
+    selectCells(probe, { resolutionWidth: 1600, rendererColumns: 100 }, CELL_PX),
+    { cells: 23, rung: 2 },
+  )
+  const rung2 = rowWidth(50, CELL_PX, probe, {
+    resolutionWidth: 1600,
+    rendererColumns: 100,
+  })
+  assert.deepEqual(rung2, { W: 23, dynamic: true, rung: 2 })
+  assert.equal(rung2.accepted, undefined)
+
+  // No pixel resolution: rung 3 with the option's default 8.
+  assert.deepEqual(
+    rowWidth(50, CELL_PX, probe, { resolutionWidth: undefined, rendererColumns: 100 }),
+    { W: 45, dynamic: true, rung: 3 },
+  )
+
+  // Option 10 with the resolution present: rung 2 never reads it.
+  assert.deepEqual(
+    rowWidth(50, 10, probe, { resolutionWidth: 1600, rendererColumns: 100 }),
+    { W: 23, dynamic: true, rung: 2 },
+  )
+  // The same input without a resolution: rung 3 reads the option, 360 / 10 = 36.
+  assert.deepEqual(
+    rowWidth(50, 10, probe, { resolutionWidth: undefined, rendererColumns: 100 }),
+    { W: 36, dynamic: true, rung: 3 },
+  )
+
+  // A zero column count skips rung 2 (no Infinity/NaN cell count).
+  assert.deepEqual(
+    rowWidth(50, CELL_PX, probe, { resolutionWidth: 1600, rendererColumns: 0 }),
+    { W: 45, dynamic: true, rung: 3 },
+  )
+})
+

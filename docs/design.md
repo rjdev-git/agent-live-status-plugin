@@ -61,7 +61,7 @@ testable from plain data.
 
   `head` is the whole row except the bar and is exactly `W - 5` cells, where
   `W` is the effective row width of §1.4 (the configured width, or the
-  detected-and-capped width, A.11). Both layout paths keep that length, so
+  measured-and-capped width, A.11, A.12). Both layout paths keep that length, so
   nothing downstream of the head learns which path produced it.
   A role head is number, name, and either the model label or, for a built-in
   role, the tag (`BUILTIN_TAG_TEXT`); an instance head is indent, title, and
@@ -281,15 +281,22 @@ last 5 columns, aligned across rows. Column `W − 5` of both shapes is the
 separator cell, so `head` is `W − 5` cells and ends with that space.
 
 - `width` option, default 35 cells.
-- Dynamic width (A.11, §1.4): the row width is derived at render time from
-  the host's reactive `PanelFrame.sidebar.width()` in CSS pixels divided by
-  the `cellPx` option (default 8, C37) and rounded half-up. The configured
-  `width` is the **fallback** when detection is unavailable and the **cap**
-  when it succeeds; the floor `MIN_ROW_CELLS = 19` applies in both paths.
-  Detection is unavailable when the panel is not in the side region, the
-  region is not visible or the sidebar is closed, the stored width has not
-  loaded (`transition() === false`), or the reported width is not a finite
-  positive number.
+- Dynamic width (A.11, ladder at A.12, §1.4): the row width is derived at
+  render time from the host's rendered environment, never from a per-install
+  config constant. Three automatic rungs, first success wins: (1) the
+  renderer's layout tree, read in terminal cells — authoritative, because the
+  panel is laid out inside it; (2) the sidebar's pixel width divided by the
+  runtime pixels-per-cell measured from the terminal's reported pixel
+  resolution and the renderer's cell columns; (3) the same pixel width
+  divided by the last-resort `CELL_PX = 8` (C37). The configured `width` is
+  the **fallback** when no rung produces a value and the **cap** when any
+  rung does; the floor `MIN_ROW_CELLS = 19` applies in both paths.
+  Detection is unavailable when the ladder cannot run at all: the panel is
+  not in the side region, the region is not visible or the sidebar is closed,
+  the stored width has not loaded (`transition() === false`), or every width
+  read is not a finite positive number. Individual rungs also skip without
+  failing the ladder: an ambiguous layout read skips rung 1, an absent
+  terminal pixel resolution skips rung 2, and the next rung decides.
 - Proportional fields (A.11): the "rest" is the row minus number 3 (role) or
   indent 3 (instance), the gap 1, the separator 1 and the boxes 5 — `W − 10`
   on both shapes. On a role row `rest` splits into the name field
@@ -592,8 +599,9 @@ of R2/R4/R6 are testable without the SDK.
 
 All positions are 1-based columns. `W` is the effective row width from §1.4:
 on the fallback path the configured `width` raised to `MIN_ROW_CELLS`; on the
-proportional path (A.11) the detected cell count, capped by the configured
-`width` and floored at `MIN_ROW_CELLS`. `W >= 19` always (F1, F33).
+proportional path (A.11) the measured cell count from the A.12 ladder, capped
+by the configured `width` and floored at `MIN_ROW_CELLS`. `W >= 19` always
+(F1, F33).
 
 Box glyphs (C30, C31) each advance one cell. The A.4 glyph swap changes no
 column, no sum, and no width in this section: `BAR_CELLS` stays 5 and the
@@ -858,12 +866,26 @@ PICKER_MODEL_CELLS)` — the split rule is not applied there (R9) — and the
 picker agent uses `clip(agent, PICKER_AGENT_CELLS)` with the same `clip` rule
 (§1.3, C24, C28, F16).
 
-### 1.4 Width detection and row width (A.11)
+### 1.4 Width detection and row width (A.11, three-rung ladder at A.12)
 
-The row width is derived at render time from the host's sidebar width. Nothing
-about it is stored, snapshotted, or persisted.
+The row width is derived at render time from the host's rendered environment.
+Nothing about it is stored, snapshotted, or persisted.
 
-**SDK surface** (`node_modules/@opencode/plugin/dist/gui/solid.d.ts:33-70`):
+**Priority ladder.** R5 (A.12) measures `W` in this order; the first rung that
+produces a value wins. The configured `width` is never a measurement input: it
+is the fallback when no rung produces a value, and the cap when any rung does.
+
+1. **Rung 1 — the renderer's own layout tree, in terminal cells (C51).**
+   Authoritative: the panel is laid out inside that box, so the value already
+   is a cell count and needs no pixel conversion.
+2. **Rung 2 — sidebar pixels ÷ runtime pixels-per-cell (C52, C46).** The
+   divisor is measured from the terminal's reported pixel resolution and the
+   renderer's terminal columns, not assumed.
+3. **Rung 3 — sidebar pixels ÷ the last-resort `CELL_PX` (C37, C46).** Best
+   effort, used only when rung 2 has no pixel resolution to read.
+
+**SDK surface — panel frame** (`node_modules/@opencode/plugin/dist/gui/solid.d.ts:33-70`),
+the rung 2/3 input:
 
 - `usePanel(): PanelFrame` — valid only inside a `Panel.render`; it throws
   outside one.
@@ -874,39 +896,199 @@ about it is stored, snapshotted, or persisted.
   loads). `width()` is "the inner sidebar preference every side panel shares".
   It measures the **inner sidebar region**, which may include frame chrome
   (padding, borders, the reserved region toggle); the design treats it as the
-  slot content width without subtracting padding, and `cellPx` is the
-  calibration knob for that drift. No padding constant exists (F35,
+  slot content width without subtracting padding, and the rung-3 divisor is
+  the calibration knob for that drift. No padding constant exists (F35,
   settled).
 
-**Probe (pure).** The TUI reads the accessors into one plain object, so
-detection and rounding are testable without the SDK:
+**SDK surface — renderer** (`node_modules/@opencode/plugin/dist/tui/context.d.ts:483`,
+`@opentui/core/renderer.d.ts`), the rung 1/2 input. `context.renderer` is a
+`CliRenderer`:
+
+- `root: RootRenderable` — the layout tree root (`renderer.d.ts:270`).
+- `width`, `height` — terminal size in **cells** (`renderer.d.ts:271-272`).
+  `width` is the whole terminal's column count, which is what rung 2 needs:
+  the pixel ratio is per cell and the same for every cell on the screen.
+- `get resolution(): PixelResolution | null` — device pixels across the
+  terminal (`renderer.d.ts:441`, `PixelResolution` at `:74-77`), derived from
+  the terminal pixel-resolution escape
+  (`lib/terminal-capability-detection.d.ts:22-30`). `null` when the terminal
+  never reported it.
+- `on("resize", (width, height) => void)` — `CliRenderer extends EventEmitter`
+  and `RendererEvents.resize` is typed (`types.d.ts:120`); the event is
+  debounced until the new size is accepted (`renderer.d.ts:553`).
+- `Renderable.width` — computed width in cells (`Renderable.d.ts:256-258`);
+  `Renderable.parent` is the parent renderable (`Renderable.d.ts:193`).
+  The TUI renders into opentui's cell grid (`buffer.d.ts:9-15`
+  `BufferAccess`), not the DOM; the `CSS pixels` of `sidebar.width()` are the
+  `gui/solid.d.ts` wording and are treated as the rung 3 calibration only.
+
+**Rung 1 read rule (C51).** The plugin measures the box it is laid out in, from
+its own rendered node, with one traversal rule and no walk beyond the
+immediate parent:
+
+```
+P  = the full-mode panel's outer <text wrapMode="none"> renderable
+     (captured by `ref`; compact mode has no width arithmetic and no node)
+A  = P.parent                     // the host's slot boundary box
+ok = P && A && A !== renderer.root
+     && Number.isFinite(A.width) && A.width > 0
+     && A.width > P.width
+layoutCells = ok ? A.width : undefined
+```
+
+- **Why `P.parent` and not the rows.** The rows are `P`'s text content, so
+  `P.width` is the row width itself. Reading it would feed this pass's `W`
+  back into the next pass's measurement (wrap-shrink: rows sized in cells
+  size their parent). The read is therefore taken on the **ancestor**, which
+  the host lays out; the row content can only overflow it, never define it.
+- **Equality is a stable box, not authority (C53, PM arbitration).**
+  `A.width === P.width` cannot be distinguished from a shrink-wrapped
+  ancestor whose width the rows produced, so it never counts as a fresh rung-1
+  reading and never invents a width. It is honoured only against the record a
+  **rung-1 win already wrote in this activation**: when `lastAccepted` is
+  defined and equals the rows' current width, the pass keeps that width
+  (`rung 1`, no rung-2 consult). A stale record — undefined, or not equal to
+  the rows — is ignored and the pass falls to rung 2. Adopting the equal value
+  *without* a record would latch it (a fallback-path pass would lock the
+  configured width in and block detection), which is why the record is
+  required; the record itself can only come from a strictly wider box.
+- **Pane container rule.** The immediate parent is the host's slot boundary,
+  which the sidebar lays out at the pane's content width. The design does not
+  climb past it: a further ancestor can be the sidebar region, which includes
+  frame chrome and would over-report by that chrome. Rung 1 therefore reports
+  the slot boundary's content box, not the region.
+- **Ambiguous → next rung.** `layoutCells` is `undefined` when: the node is not
+  mounted (first pass, compact mode, sidebar closed); `P.parent` is missing or
+  is `renderer.root`; the ancestor width is not finite or not positive; the
+  ancestor width equals `P.width` and the C53 record is stale; the
+  rows are wider than the ancestor (the pane is narrower than the rendered
+  content, so the pane's own width is better read from the sidebar pixels); or
+  any getter throws. The value is read **per pass** inside the guarded memo,
+  never snapshotted as a width, never held in a signal. The one stored value is
+  the C53 record (below), which is a width the panel already adopted.
+- **Two-cycle and its dampener (C53).** Rung 1's input is the previous layout
+  frame; rungs 2/3 are state-free. Without a record, rows that exactly fill the
+  slot box alternate between rung 1 (box) and rung 2 (pixel estimate) when the
+  two sources disagree — the 40-versus-35 case. The record removes it by
+  construction: pass 1 (rows 35, box 40) wins rung 1 and records 40; pass 2
+  (rows 40, box 40) is a stable box, keeps 40, and stays there until the box or
+  the pixel source changes. Anti-latch survives because the record exists only
+  after a strict rung-1 win, and shrink detection survives because a box
+  **narrower** than the rows (`A < P`, or an unreadable box) clears the record
+  and hands the pass to rung 2 (`accepted` is `undefined`).
+- **Invalidation.** One `context.renderer.on("resize", bump)` per activation,
+  released on the activation's dispose path (the same cleanup that releases
+  the slot claim; `onCleanup` where a reactive owner exists). Every pass
+  re-reads `A.width` (cheap);
+  no polling and no timer. Reading `renderer.width`/`resolution` is a bare
+  getter read and does not subscribe, so the resize event is the terminal
+  resize trigger while the reactive `sidebar.width()` read stays the sidebar
+  drag trigger.
+- **Bootstrap and detach (identity rule, PM arbitration).** Before the ref
+  attaches there is no rung 1. The SDK's refs fire **on mount only**: the insert
+  effect calls `props.ref(node)` (`@opentui/solid/index.js:430`, and `:884` in
+  the slot path), and the removal path `_removeNode` (`:557`) never calls it
+  with a `null`/absent node. The callback therefore compares **node identity,
+  not absence**:
+
+  ```
+  if (node !== panelNode) { panelNode = node; props.bump() }   // a fresh instance = a new full-mode mount
+  ```
+
+  A different node object is a new full-mode mount and bumps the view signal
+  once, so the first measured pass follows the first layout frame; a repeated
+  call for the same node does nothing. The ref lives in the inner full-mode
+  component, so `onCleanup(() => { panelNode = undefined })` clears the pointer
+  when that subtree unmounts — compact swap, sidebar close, region teardown —
+  and no pass ever reads `.parent`/`.width` from a detached node. There is no
+  absence case to handle because refs never deliver one. The C53 record
+  survives a remount (per activation, not per node) and is revalidated against
+  the new rows' width before it is ever used; nothing polls.
+
+**Rung 2 (C52).** `runtimeCellPx = resolution.width / renderer.width`, both
+read in the same pass. Both must be finite and `> 0`; `resolution === null`
+means the terminal reports no pixel size and rung 2 is skipped. Rung 2 uses
+the **same px source as rung 3** — the host's sidebar pixel width — and takes
+only the *divisor* from the renderer instead of the 8-pixel assumption, so the
+algebra is
+`cells = roundHalfUp(cssWidth / (resolution.width / renderer.width))`.
+
+**Rung 3 (C37).** `cells = roundHalfUp(cssWidth / cellPx)` with `cellPx` from
+the existing option, defaulting to `CELL_PX = 8` when the value is absent, not
+finite, or not positive (`resolveCellPx`, unchanged). The option is read by
+rung 3 **only**; rung 2 never reads it, so a user-set `cellPx` no longer
+affects a panel whose terminal reports its pixel resolution. It stays a manual
+brake and a test override for terminals that report none — that is the whole
+of its contract.
+
+**Probe (pure).** The TUI reads the host accessors into plain objects, so the
+ladder and its rounding are testable without the SDK:
 
 ```ts
-type WidthProbe = {
+type WidthProbe = {            // unchanged from A.11
   placement: "side" | "mobile"
   visible: boolean
   opened: boolean
   loaded: boolean      // transition()
   cssWidth: number     // sidebar.width()
 }
-function detectedCells(probe: WidthProbe | undefined, cellPx: number): number | undefined
-function rowWidth(declaredWidth: number, cellPx: number, probe: WidthProbe | undefined):
-  { W: number; dynamic: boolean }
+type RuntimeMetrics = {        // A.12: renderer-derived readings only
+  layoutCells?: number       // C51: rung-1 cell count, strictly wider than the rows
+  boxCells?: number          // C53: one read of A.width, compared to rowsCells
+  rowsCells?: number         // C53: P.width, a separate read of the panel node
+  resolutionWidth?: number   // device pixels across the terminal
+  rendererColumns?: number   // terminal columns
+}
+function runtimeCellPx(metrics: RuntimeMetrics | undefined): number | undefined   // C52
+function selectCells(probe: WidthProbe | undefined, metrics: RuntimeMetrics | undefined,
+                     fallbackCellPx: number): { cells: number; rung: 1 | 2 | 3 } | undefined
+function rowWidth(declaredWidth: number, cellPx: number, probe?: WidthProbe,
+                  metrics?: RuntimeMetrics, lastAccepted?: number):
+  { W: number; dynamic: boolean; rung?: 1 | 2 | 3; accepted?: number }   // accepted = C53 record
 ```
 
-`detectedCells` returns `roundHalfUp(cssWidth / cellPx)` when the probe is
-present **and** `placement === "side"` **and** `visible` **and** `opened`
-**and** `loaded` **and** `Number.isFinite(cssWidth)` **and** `cssWidth > 0`;
-otherwise it returns `undefined` (C46).
-
-`rowWidth`:
+`selectCells` (C46) is unchanged by the dampener; it never sees
+`lastAccepted` and reports rung 1 only for a strictly wider box:
 
 ```
-declared = max(MIN_ROW_CELLS, declaredWidth)
-detected = detectedCells(probe, cellPx)
-W        = detected === undefined ? declared : max(MIN_ROW_CELLS, min(declared, detected))
-dynamic  = detected !== undefined
+gates = probe && probe.placement === "side" && probe.visible
+        && probe.opened && probe.loaded
+if (!gates) return undefined
+if (layoutCells present, finite, > 0) return { cells: roundHalfUp(layoutCells), rung: 1 }
+px = runtimeCellPx(metrics)
+if (px !== undefined && cssWidth finite > 0) return { cells: roundHalfUp(cssWidth / px), rung: 2 }
+if (cssWidth finite > 0) return { cells: roundHalfUp(cssWidth / resolveCellPx(fallbackCellPx)), rung: 3 }
+return undefined
 ```
+
+The shared gates are the A.11 gates and apply to all three rungs and to the
+C53 stable box: a slot
+outside `Panel.render` (`prompt.footer`) has no frame, so nothing applies and
+the configured width governs (F34). A rung whose own reading is absent falls
+through to the next; the rung index is returned for tests and diagnosis only
+and changes no arithmetic.
+
+`rowWidth` (C47, with the C53 record):
+
+```
+declared = max(MIN_ROW_CELLS, declaredWidth ?? DEFAULT_WIDTH)
+detected = selectCells(probe, metrics, cellPx)
+stable   = gates(probe) && metrics && metrics.boxCells === metrics.rowsCells
+           && lastAccepted !== undefined && lastAccepted === metrics.rowsCells
+if (detected?.rung === 1):
+    W = clamp(detected.cells); rung = 1; accepted = W          // C51 win
+else if (stable):
+    W = clamp(lastAccepted);   rung = 1; accepted = lastAccepted   // C53 keep
+else:
+    W = detected === undefined ? declared : clamp(detected.cells)
+    rung = detected?.rung; accepted = undefined                // C53 cleared
+clamp(x) = max(MIN_ROW_CELLS, min(declared, x))
+dynamic  = rung !== undefined
+```
+
+`accepted` is the value the TUI stores as `lastAccepted` for the next pass; it
+is `undefined` on every non-rung-1 outcome, so a stale record cannot survive a
+shrink, an unreadable box, or a fall-through.
 
 The floor `MIN_ROW_CELLS = 19` is unchanged in both paths: the detected width
 passes through the same `effectiveWidth(W) = max(MIN_ROW_CELLS, W)` that
@@ -916,19 +1098,22 @@ than 19 cells yields a 19-cell row that overflows the region — the same
 consequence F1 already accepts for a configured width below 19 (F33, settled).
 The cap is `declared`, so detection can only narrow a row, never widen it.
 
-**Rounding.** Every A.11 rounding is half-up on non-negative values:
+**Rounding.** Every width rounding (A.11, A.12) is half-up on non-negative
+values:
 `roundHalfUp(x) = floor(x + 1/2)`, so a tie `x.5` always rounds **up**
 (`260 / 8 = 32.5 → 33`; `288 / 8 = 36.0` stays 36). The share is evaluated in
 integers,
 `roundHalfUp(rest × NUM / DEN) = floor((2 × rest × NUM + DEN) / (2 × DEN))`,
-so no floating-point error can enter a split. `cssWidth` may be fractional and
-is rounded once, before the cap.
+so no floating-point error can enter a split. Each rung's cell value — the
+layout width and both pixel divisions — is rounded once, before the cap;
+`cssWidth` and `runtimeCellPx` may be fractional.
 
-**Path selection.** `dynamic` comes from detection alone; the field split
-additionally needs both floors clear. `binds` is computed on the fields the
-split would produce (`N`/`M` role, `T`/`M` instance); `binds || !dynamic`
-selects the fallback arithmetic of §1.1/§1.2 exactly as it stands (C48, C49).
-A split is never half-applied: one row is wholly proportional or wholly fixed.
+**Path selection.** `dynamic` comes from detection alone (any rung produced a
+value); the field split additionally needs both floors clear. `binds` is
+computed on the fields the split would produce (`N`/`M` role, `T`/`M`
+instance); `binds || !dynamic` selects the fallback arithmetic of §1.1/§1.2
+exactly as it stands (C48, C49). A split is never half-applied: one row is
+wholly proportional or wholly fixed.
 
 Width ladder (all values computed by the rules above; `M` is the model field):
 
@@ -947,50 +1132,116 @@ Width ladder (all values computed by the rules above; `M` is the model field):
 Floor edges: the last floor-bound width is 23 (role name 5, instance title 5);
 24 is the first proportional width. Tag edge: whole at `M >= 10` (W = 26),
 clipped at `M = 9` (W = 25). Detection edges: W is the minimum of `declared`
-and `detected`, then floored at 19.
+and `detected`, then floored at 19; `detected` is whichever rung produced it,
+and the table keys off `W` alone, so no row value changes with the rung.
 
 **Where it is read (TUI).** `src/tui.tsx` sits in SolidJS. The panel render
-component resolves the frame once in its body, and reads the four accessors
-**inside the same `guarded` memo that builds the view**, so the width stays
-reactive:
+component resolves the frame once in its body, and the **inner full-mode
+component** owns the layout handles, captures the panel node by `ref`, and
+reads the probe plus the renderer readings **inside the same `guarded` memo
+that builds the view**, so the width stays reactive:
 
 ```ts
-// component body, inside the R11 guard: a slot outside Panel.render throws
-const frame = (() => { try { return usePanel() } catch { return undefined } })()
+// Status owns the C53 record for the whole activation and renders
+// <Show when={!compact()} fallback={compactLine}><FullPanel .../></Show>;
+// FullPanel unmounts when compact wins, so its cleanup is the detach signal.
+let lastAccepted: number | undefined            // C53, per activation (Status scope)
 
-// inside the guarded memo, next to sources() and panel():
-const probe: WidthProbe | undefined = frame && {
-  placement: frame.placement(), visible: frame.visible(),
-  opened: frame.sidebar.opened(), loaded: frame.sidebar.transition(),
-  cssWidth: frame.sidebar.width(),
+function FullPanel(props: { context: Context; bump: () => void;
+                            lastAccepted: () => number | undefined;
+                            accept: (next?: number) => void; ... }) {
+  let panelNode: TextRenderable | undefined     // layout handle, not a width
+  // refs fire on mount only (@opentui/solid/index.js:430, :884); removal never
+  // calls back (_removeNode, :557), so identity — not absence — is the signal.
+  const attachPanel = (node: TextRenderable) => {
+    if (node !== panelNode) { panelNode = node; props.bump() }  // new instance = new mount
+  }
+  onCleanup(() => { panelNode = undefined })   // subtree unmount: no phantom reads
+
+  // inside the guarded memo, next to sources() and panel():
+  // (usePanel is resolved once in this component: a slot outside Panel.render throws)
+  const frame = (() => { try { return usePanel() } catch { return undefined } })()
+  const probe: WidthProbe | undefined = frame && {
+    placement: frame.placement(), visible: frame.visible(),
+    opened: frame.sidebar.opened(), loaded: frame.sidebar.transition(),
+    cssWidth: frame.sidebar.width(),
+  }
+  const metrics: RuntimeMetrics | undefined = (() => {
+    try {
+      const renderer = props.context.renderer
+      const parent = panelNode?.parent ?? undefined
+      const boxCells =
+        panelNode && parent && parent !== renderer.root
+          && Number.isFinite(parent.width) && parent.width > 0
+          ? parent.width : undefined
+      return {
+        // C51: one read of A.width, two projections. Strict authority:
+        layoutCells: panelNode && boxCells !== undefined && boxCells > panelNode.width
+          ? boxCells : undefined,
+        // C53: that same A.width, compared to rowsCells (a separate P.width read):
+        boxCells,
+        rowsCells: panelNode?.width,
+        resolutionWidth: renderer.resolution?.width,
+        rendererColumns: renderer.width,
+      }
+    } catch {
+      return undefined        // a width failure is a fallback, never a toast
+    }
+  })()
+  const { W, dynamic, accepted } = rowWidth(
+    props.width(), props.cellPx(), probe, metrics, props.lastAccepted(),
+  )
+  props.accept(accepted)   // C53: the record either advances or clears
+  return <text wrapMode="none" ref={attachPanel}>…</text>
 }
 ```
 
 Reading `sidebar.width()` inside the memo is what makes the row width
-reactive: the host's accessor is a signal, so a sidebar resize re-runs the
-memo and `panel()` rebuilds every row at the new `W`. Only the frame handle is
-kept; the width value itself is never snapshotted (unlike the A.8 member set),
-never cached in the view, and never written to storage.
+reactive: the host's accessor is a signal, so a sidebar drag re-runs the memo
+and `panel()` rebuilds every row at the new `W`. A terminal resize is a plain
+getter read with no subscription, so `setup` adds exactly one listener,
+`context.renderer.on("resize", bump)`, released on the activation's dispose
+path (the same cleanup that releases the slot claim; `onCleanup` inside a
+reactive owner). Inside `FullPanel` the full-mode `<text>` carries
+`ref={attachPanel}`; compact mode renders no `FullPanel`, so no node is
+captured and its cleanup has already cleared the pointer. Only the frame handle
+and the renderable handle are kept — both layout handles, neither a width
+value. The width is never snapshotted as a detection input and never written
+to storage; the one retained number is C53's adopted-width record, which the
+ladder itself produced (below). There is no polling:
 
-- **R11.** The `usePanel()` call sits inside the existing guard's `try`, so a
-  throw (a slot that is not inside a `Panel.render`, for example
-  `prompt.footer`) degrades to `probe = undefined` and the configured-width
-  path — not to a toast. Only a genuine build failure reaches the toast.
+- **R11.** `usePanel()` and the renderer reads sit inside the existing guard's
+  `try`, so a throw (a slot that is not inside a `Panel.render`, for example
+  `prompt.footer`; a destroyed renderer; a detached renderable) degrades to
+  `probe`/`metrics` `undefined` and the next rung or the configured-width path
+  — not to a toast. Only a genuine build failure reaches the toast, and width
+  fallbacks never dedupe against a toast because they emit none.
+- **C53 record (not a panel cache).** `lastAccepted` is a single number held
+  by the outer panel component for one activation (passed into the inner
+  full-mode component), TUI-side, never persisted and
+  never a signal. It is assigned every pass from `rowWidth`'s `accepted`, which
+  is `undefined` on any non-rung-1 outcome, so it clears itself when unused.
+  It does not touch the A.8 member snapshot, `sources()`, the view, or G16;
+  losing it (a remount, a reload) only costs one rung-1 measurement pass.
 - **`prompt.footer`.** It is a `context.ui.slot` prompt-region append, not a
-  panel render, so `usePanel()` throws there. Detection does not apply and the
-  configured `width` governs every time (F34). `sidebar.content` and
-  `sidebar.footer` attempt detection and fall back when the host exposes no
-  frame.
+  panel render, so `usePanel()` throws there. Detection does not apply (the
+  shared gates fail) and the configured `width` governs every time (F34).
+  `sidebar.content` and `sidebar.footer` attempt the ladder and fall back when
+  the host exposes no frame.
 - **Live width change.** A resize between two recomputes rebuilds the rows at
   the new `W`. Only field sizes and their text change: order, numbering,
   `working`, `total`, `more`, `filled`, `tps` and every row `state` are
   width-independent, so no grace window starts, ends, or moves and the R4
   ticker is not restarted (T21).
 - **No data sync.** Width detection reads no data-layer source and triggers no
-  `session.sync`, `message.sync`, or event subscription. G16 (the message
-  re-sync gate, §2) is untouched.
+  `session.sync`, `message.sync`, or host event subscription: the one listener
+  is the renderer's `resize`, which is a layout event, not a data event. G16
+  (the message re-sync gate, §2) is untouched.
 - **Compact mode** renders the single line `sub N` and has no width
-  arithmetic; the probe is irrelevant to it.
+  arithmetic; no node is captured and no rung applies.
+- **One constant, one meaning.** Rung 1 produces a cell count, rungs 2 and 3
+  produce a cell count from a pixel count; `CELL_PX` remains a pixel count and
+  is never a cell width, a field size, or `DEFAULT_WIDTH` (C37, C51, C52).
 
 ## 2. Data flow
 
@@ -1013,7 +1264,8 @@ recompute.
 | `context.data.location.model.list(location)` | model id, modelID, providerID, name | model display names only; `limit.context` is no longer read |
 | `context.data.location.provider.list(location)` | provider id, name | provider display names / short label last word |
 | `context.theme` | `text.base`, `text.muted`, `text.feedback.success/warning.base` | title, idle/active/grace text, filled boxes (success), empty boxes (muted) |
-| `usePanel()` frame (`PanelFrame.sidebar`, SDK `gui/solid.d.ts:33-70`) | `placement()`, `visible()`, sidebar `opened()`, `transition()` (stored width loaded), `width()` in CSS px | row-width probe only (§1.4, A.11); layout, never row data and never a sync trigger |
+| `usePanel()` frame (`PanelFrame.sidebar`, SDK `gui/solid.d.ts:33-70`) | `placement()`, `visible()`, sidebar `opened()`, `transition()` (stored width loaded), `width()` in CSS px | rung 2/3 probe only (§1.4, A.11, A.12); layout, never row data and never a sync trigger |
+| `context.renderer` (`CliRenderer`) | `root` (layout tree root), `width`/`height` in terminal cells, `resolution` device px or `null`, `"resize"` event | rung 1 layout read (C51) and rung 2 cell calibration (C52), plus the renderer `resize` invalidation (§1.4, A.12); layout only, never row data |
 | `context.storage.store("subagent-live-status-plugin")` | persisted `{ compact }` | R10 |
 | slot input `sessionID` | viewed session id | R3 tab scope; compact count scope |
 | host events (`session.created/deleted/moved/forked/renamed/status/idle/agent.selected/model.selected/execution.started/succeeded/failed/interrupted`, plus `session.step.ended` and `session.message.content.updated`) | invalidation; on `session.created` and `session.execution.started` also a sync trigger, on `session.step.ended` a message re-sync trigger (known-fire: final `tokens` per completed assistant step), on `session.message.content.updated` a second re-sync trigger (delivery unverified; G16) | bump the view signal; load the instance session then its messages; re-read messages when an assistant step ends |
@@ -1025,15 +1277,22 @@ Opening a picked session is an action, not a source: the TUI calls
 (`src/tui.tsx:373-378`). It never reads `context.ui.router.current()`, so that
 value is not a data source for any field.
 
-Width detection (A.11, §1.4) is a layout input, not a data source. The probe
-is read inside the render memo that builds the view, so a sidebar resize
-re-runs the pass and rebuilds the rows at the new width; it is **not**
-snapshotted (the A.8 member snapshot is unaffected and stays the only
-snapshot). Detection reads no data layer: no `session.sync`, no
-`message.sync`, no new event subscription, so the G16 gate below keeps exactly
-its two triggers and its once-per-session bypass. `prompt.footer` is not a
-panel render, so its probe throws and the configured `width` governs (F34). A
-detection failure degrades to the configured width, never to the R11 toast.
+Width detection (A.11, ladder at A.12, §1.4) is a layout input, not a data
+source. The probe and the renderer readings are read inside the render memo
+that builds the view, so a sidebar drag or a terminal resize re-runs the pass
+and rebuilds the rows at the new width; neither value is **snapshotted** (the
+A.8 member snapshot is unaffected and stays the only snapshot; C53's
+`lastAccepted` is a panel-local record of an adopted width, not a source
+snapshot). Detection
+reads no data layer: no `session.sync`, no `message.sync`, no host event
+subscription, so the G16 gate below keeps exactly its two triggers and its
+once-per-session bypass. The renderer's `resize` listener is a layout
+invalidation owned by the panel component (one per activation, removed on
+cleanup), not a data subscription. `prompt.footer` is not a panel render, so
+its probe is absent and the configured `width` governs (F34). A detection
+failure — an ambiguous layout read, a missing pixel resolution, a detached
+renderable — skips that rung or falls to the configured width, never to the
+R11 toast.
 
 Location: the location the TUI is showing (`context.location`, else
 `context.data.location.default()`). The plugin never merges agent definitions
@@ -1253,7 +1512,9 @@ enter the comparison. R8's order is untouched: the instance side still runs
 own model → live agent definition → ancestor → `UNKNOWN_MODEL`.
 
 A.11 changes no resolution step either: §1.4's field sizes change where a
-label clips and how far it pads, never which ref wins. R9's picker keeps its
+label clips and how far it pads, never which ref wins. A.12 likewise: the
+ladder changes only how `W` is measured, so no ref, label, clip budget or
+comparison operand moves. R9's picker keeps its
 fixed budgets (`PICKER_MODEL_CELLS` 96, `PICKER_AGENT_CELLS` 24; C24, C28) and
 is independent of the sidebar width; R10's palette commands are unchanged.
 
@@ -1264,8 +1525,12 @@ C5 and C11, and the box glyphs in C30/C31 (`▓` U+2593, `░` U+2591), each of
 which counts as one cell. Values are exact, not shapes; a fixture that
 asserts only width or "contains" does not satisfy R12.
 
-C37–C50 are A.11's dynamic-width numbers; C1–C36 keep their values. A row
-string quoted by C2 or C5–C36 is a **fallback-path** fixture unless its row
+C37–C50 are A.11's dynamic-width numbers; C1–C36 keep their values. A.12
+rewrites C46 into the three-rung ladder, demotes C37 to the rung-3 divisor,
+and adds C51 (rung-1 layout read), C52 (runtime pixels-per-cell) and C53 (the
+stable-box dampener); C38–C45 and C48–C50 keep their values, and C47 keeps its
+formula with the rung and the C53 record passed through.
+A row string quoted by C2 or C5–C36 is a **fallback-path** fixture unless its row
 says otherwise: the column arithmetic is path-independent, only the field
 sizes and the text inside them move (§1.1, §1.2, §1.4).
 
@@ -1308,7 +1573,7 @@ sizes and the text inside them move (§1.1, §1.2, §1.4).
 | C35 | instance model visibility rule (A.10) | `shown = resolvedShort(instanceRef) !== resolvedShort(roleRef)`, with `resolvedShort(ref) = ref ? shortLabel(ref) : UNKNOWN_MODEL`; compared before any clip, cap or padding | whether the instance model column holds a label or is omitted | equal (member role): role `Go/Kimi K3.1 Pro`, instance resolves `Go/Kimi K3.1 Pro` → omitted, head `" └ Inspect…                   "` (30 cells: 3 + 8 + 1 + 17 + 1); the boxes still start in column 31 | differ: role `Go/Kimi K3.1 Pro`, instance `Go/Kimi K3.1 Pro Max` → shown as `" └ Inspect… Go/Kimi K3.…      "` (30 cells: 12-cell split text + 5 pad + 1 separator); a comparison made **after** clipping sees both as `Go/Kimi K3.…` and omits, so it fails the pin. Both unknown (role definition has no model, instance resolves none) → equal → omitted (F29). A temporary built-in role whose tag is shown but whose live definition model equals the instance's → omitted (T8); a role label longer than the 20-cell text cap still compares by its unclipped label and is omitted (T13); refs differing only by variant compare equal and are omitted (T14) | R3 |
 | C36 | omitted-slot rule (A.10) | `shown ? padCells(fitModel(label, min(F, INSTANCE_MODEL_CELLS)), F) : " ".repeat(F)`, where `F` is the instance model field (§1.2: fallback `W−18`, proportional C49's `M`); the field width and the separator stay in both branches | content of the instance model field | omitted at W = 35 → 17 spaces, head 30 cells, separator the 30th cell, boxes 31–35; at W = 30 (field 12) → 12 spaces; at W = 29 (field 11) → 11 spaces; at W = 19 (field 1) → 1 space, head `" └ Inspect…   "` (14 cells), row 19 cells; at W = 28 proportional (field 11) → head `" └ Inspec…"` + 13 spaces (23 cells) | shown at W = 19 → `fitModel(label, 1)` falls to `clip(label, 1)` = `"…"`, head `" └ Inspect… … "` (14 cells, content differs from the 1-space slot); an implementation that drops the field or the separator when omitted yields a 13-cell head and shifts the boxes, and a reflow that widens the title breaks C11 | R3, R5 |
 
-| C37 | `CELL_PX` | 8 | CSS pixels per cell; the divisor for width detection | 280 px → `280 / 8 = 35.0` → 35 cells; 288 → 36 | 260 px → 32.5 → 33 cells (half-up; a truncating or half-even rule gives 32); 259 px → 32.375 → 32 | R5 |
+| C37 | `CELL_PX` | 8 | last-resort pixels per cell: the rung-3 divisor and the `cellPx` option's default. Rung 2 never reads it (C52) | 280 px at rung 3 → `280 / 8 = 35.0` → 35 cells; 288 → 36 | 260 px → 32.5 → 33 cells (half-up; a truncating or half-even rule gives 32); 259 px → 32.375 → 32; the option `cellPx: 10` at rung 3 with 360 px → 36 | R5 |
 | C38 | `ROLE_REST_FIXED_CELLS` | 10 (number 3 + gap 1 + separator 1 + boxes 5) | role cells outside the proportional split | W 35 → rest 25 → name 10 + model 15 | W 24 → rest 14 → 6 + 8; W 19 → rest 9 (a floor binds, C48) | R5 |
 | C39 | `INSTANCE_REST_FIXED_CELLS` | 10 (indent 3 + gap 1 + separator 1 + boxes 5) | instance cells outside the proportional split | W 35 → rest 25 → title 8 + model 17 | W 24 → rest 14 → 6 + 8; W 19 → rest 9 (a floor binds, C49) | R5 |
 | C40 | `ROLE_NAME_SHARE_NUM` = 2, `ROLE_NAME_SHARE_DEN` = 5 | 2/5 of the rest | role name field share, rounded half-up | rest 25 → 10 (10.0); rest 27 → 11 (10.8); rest 40 → 16 (16.0) | rest 13 → 5 (5.2, below the C42 floor → fallback); rest 14 → 6 (5.6, first non-binding) | R5 |
@@ -1317,11 +1582,14 @@ sizes and the text inside them move (§1.1, §1.2, §1.4).
 | C43 | `ROLE_MODEL_MIN_CELLS` | 4 | role model field floor | rest 14 → model 8 | rest 5 → name 2 and model 3 (synthetic: `W >= 19` gives `rest >= 9`, where the model is 5 and the name floor already binds, so this floor is a guard — the C16/C17 precedent) | R5 |
 | C44 | `INSTANCE_TITLE_MIN_CELLS` | 6 | title field floor (proportional path) | rest 14 → title 6 | rest 13 → title 5 → fallback (instance twin of C42) | R5 |
 | C45 | `INSTANCE_MODEL_MIN_CELLS` | 4 | instance model field floor | rest 14 → model 8 | rest 5 → title 2 and model 3 (synthetic, same guard as C43: at `rest 9` the model is 5 and the title floor binds first) | R5 |
-| C46 | `detectedCells` rule | available iff probe present, `placement === "side"`, `visible`, `opened`, `loaded`, finite `cssWidth > 0`; then `roundHalfUp(cssWidth / CELL_PX)` where a tie `x.5` rounds **up**, else `undefined` | detected width in cells, and whether detection counts | probe `{side, visible, opened, loaded, 280}` → 35, `dynamic = true`; `{side, …, 260}` → 33 (32.5 rounds up) | `transition() === false`, `opened() === false`, `visible() === false`, `placement === "mobile"`, `cssWidth 0`, `cssWidth NaN`, or no probe → `undefined`, `dynamic = false` | R5 |
-| C47 | `rowWidth` rule | `declared = max(MIN_ROW_CELLS, width ?? DEFAULT_WIDTH)`; `W = detected === undefined ? declared : max(MIN_ROW_CELLS, min(declared, detected))` | effective width | declared 35, detected 50 → W 35 (cap); declared 35, detected 28 → W 28; declared 18 → 19 | declared 35, detected 12 → W 19 (floor, not 12); detected undefined → 35 | R5 |
+| C46 | width ladder (rung selector) | `selectCells(probe, metrics, cellPxOption)`: shared gates (probe present, `placement === "side"`, `visible`, `opened`, `loaded`) or `undefined`; then rung 1 when `metrics.layoutCells` is finite and `> 0` → `roundHalfUp(layoutCells)`; else rung 2 when `runtimeCellPx(metrics)` is defined (C52) **and** `cssWidth` finite `> 0` → `roundHalfUp(cssWidth / runtimeCellPx)`; else rung 3 when `cssWidth` finite `> 0` → `roundHalfUp(cssWidth / resolveCellPx(cellPxOption))`; else `undefined`. First succeeding rung wins; ties round **up**. The option is read by rung 3 only | detected width in cells and the rung that produced it | rung 1: `{layoutCells 40}` → `cells 40, rung 1`; rung 2: `{resolutionWidth 1600, rendererColumns 200, cssWidth 280}` → `cells 35, rung 2`; rung 3: `{cssWidth 280}` with the option 8 → `cells 35, rung 3`; `{cssWidth 260}` → `cells 33` (32.5 rounds up) | all three present (`layoutCells 40`, resolution 1600/200, `cssWidth 280`) → `cells 40, rung 1`, never rung 2's 35; `{resolutionWidth 1600, rendererColumns 0, cssWidth 280}` → rung 2 skipped, rung 3 → `cells 35` (a divide-by-zero rung 2 yields `Infinity`/`NaN` and fails); `transition() === false`, `opened() === false`, `visible() === false`, `placement === "mobile"`, `cssWidth 0`, `cssWidth NaN`, or no probe → `undefined`, `dynamic = false` even when `layoutCells` is present | R5 |
+| C47 | `rowWidth` rule (with C53) | `declared = max(MIN_ROW_CELLS, width ?? DEFAULT_WIDTH)`; `detected = selectCells(probe, metrics, cellPx)` (C46); rung-1 win → `W = clamp(detected.cells)`, `accepted = W`; else C53 stable box → `W = clamp(lastAccepted)`, `accepted = lastAccepted`, `rung 1`; else `W = detected === undefined ? declared : clamp(detected.cells)`, `accepted = undefined`; `clamp(x) = max(MIN_ROW_CELLS, min(declared, x))`. `lastAccepted` is C53's record; the rung changes no arithmetic | effective width and the next `lastAccepted` | declared 35, detected 50 → W 35 (cap); declared 35, detected 28 → W 28; declared 18 → 19; declared 40, detection 50 → `W 40, accepted 40` | declared 35, detected 12 → W 19 (floor, not 12); detected undefined and no stable box → 35; any rung-2/3 outcome returns `accepted undefined` | R5 |
 | C48 | role split rule (A.11) | `rest = W − C38`; `N = roundHalfUp(rest × 2/5)`; `M = rest − N`; `dynamic && N >= 6 && M >= 4` → `N`/`M`, else the pre-A.11 `9 / (W − 19)` | role field sizes and the name text budget | W 35 dynamic → 10/15 → `" 1.explore    Go/Kimi K3.1 P… "` (30 cells); W 50 dynamic → 16/24 → `" 1.explore          Go/Kimi K3.1 Pro        "` (45 cells) | W 35 fallback → 9/16 → `" 1.explore   Go/Kimi K3.1 Pro "` (30 cells) at the same W; W 23 dynamic → floor → 9/4 → `" 1.designer  …/K… "` (18 cells) | R5 |
 | C49 | instance split rule (A.11) | `rest = W − C39`; `share = roundHalfUp(rest × 2/5)`; `T = min(share, INSTANCE_TITLE_CELLS)`; `M = rest − T`; `dynamic && T >= 6 && M >= 4` → `T`/`M`, else the pre-A.11 `8 / (W − 18)` | title and model field sizes, and the unused-title-cells rule | W 28 dynamic → 7/11 → `" └ Inspec… Go/Grok 4.7 "` (23 cells); W 35 dynamic → 8/17 (identical to fallback); W 24 dynamic → 6/8 | W 28 fallback → 8/10 → `" └ Inspect… Go/Grok 4… "` (23 cells) at the same W; W 23 dynamic → floor → 8/5 | R5 |
 | C50 | built-in tag in the derived role model field | `padCells(clip(BUILTIN_TAG_TEXT, M), M)` where `M` is C48's model field on the proportional path and `W − 19` on the fallback path; the tag's 10 cells are its own cap, `ROLE_MODEL_MAX_CELLS` never applies | tag text and its field | W 26 dynamic → M 10 → `" 1.explo… [built-in] "` (21 cells); W 35 dynamic → M 15 → `" 1.explore    [built-in]      "` (30 cells) | W 25 dynamic → M 9 → `" 1.explo… [built-i… "` (20 cells); W 28 fallback → field 9 → `" 1.explore   [built-i… "` (23 cells) | R2, R5 |
+| C51 | rung-1 layout read (renderer tree) | host-side rule, injected into the pure layer as `layoutCells`, plus `boxCells` (both projected from **one** read of `A.width`) and `rowsCells` (a **separate** getter read of `P.width` in the same pass): `P` = the full-mode panel's outer `<text>` renderable (captured by `ref`), `A = P.parent`; authoritative iff `P` and `A` exist, `A !== renderer.root`, `Number.isFinite(A.width)`, `A.width > 0`, and `A.width > P.width` (strict); value = `A.width`. Otherwise `undefined`. Read per pass, never stored as a width; a throw is caught and yields `undefined`, never a toast | `metrics.layoutCells` and `boxCells` are one read of the ancestor's width; `metrics.rowsCells` is the panel node's own width, read separately (never `A.width`) | `A.width 40`, `P.width 35` → 40; `A.width 36`, `P.width 35` → 36 (the one-cell strict edge); `A.width 40` while a resolution reading would have said 35 → rung 1 wins with 40 | `A.width 35`, `P.width 35` → `undefined` (equality is not authority; it is C53's stable box, which keeps the recorded width only against a valid record); `A.width 30`, `P.width 35` → `undefined` (rows overflow the slot box → rung 2/3 read the pane); `A === renderer.root` → `undefined`; node unmounted (compact mode, closed sidebar, first pass) → `undefined`; non-finite or `<= 0` ancestor width → `undefined`; a throwing `width`/`parent` getter → `undefined`; `rowsCells` set from `A.width` → equality always true and T24's equality-without-record case fails | R5 |
+| C52 | `runtimeCellPx` | `resolutionWidth / rendererColumns`, using `PixelResolution.width` (device px, `renderer.resolution`) and `CliRenderer.width` (terminal columns); defined iff both are finite and `> 0` | device pixels per terminal cell, the rung-2 divisor | 1600 px / 200 columns → 8 → 280 CSS px → 35 cells; 1000 / 120 → 8.333… → 250 px → 30 cells | `resolution === null` (terminal reports no pixel-resolution escape) → `undefined`; `rendererColumns 0` → `undefined`; `resolutionWidth 0` → `undefined`; `rendererColumns NaN` → `undefined` | R5 |
+| C53 | stable-box dampener | `stable = gates && boxCells === rowsCells && lastAccepted !== undefined && lastAccepted === rowsCells` (the `gates` are C46's); when stable (and rung 1 is not strictly wider) `rowWidth` keeps `W = clamp(lastAccepted)`, reports `rung 1`, and returns `accepted = lastAccepted`; every other outcome returns `accepted = undefined`, which clears the record. The record is written only by a strict rung-1 win (`accepted = W`), lives in the TUI for one activation, is never persisted, never a signal, and is revalidated against the rows' width before use | the `lastAccepted` record (one number), and the absence of a rung-1 ↔ rung-2 cycle | declared 40, two passes: pass 1 rows 35, box 40, `lastAccepted undefined` → rung 1, `W 40, accepted 40`; pass 2 rows 40, box 40, `lastAccepted 40` → stable, `W 40, accepted 40` (same result, no rung-2 consult) | rows 40, box 40, `lastAccepted 35` (stale: not the rows' width) → not stable → rung 2's value, `accepted undefined`; rows 35, box 30 (shrink) with `lastAccepted 40` → not stable → rung 2, record cleared; rows 40, box 40, `lastAccepted undefined` (a fallback-path pass invented no record) → not stable → rung 2; probe gates fail → no stable box | R5 |
 
 C32 is a set-membership boundary, not a width. The fits side is "the list has
 at least one id outside the set"; the does-not-fit side is "every id is in the
@@ -1417,10 +1685,12 @@ One constant, one meaning, checked at the places the numbers collide:
   field. The 6/6 and 4/4 coincidences are construction only. None may be
   replaced by `INSTANCE_TITLE_CELLS` (a cap, not a floor), by
   `ROLE_NAME_CELLS` (the fallback name cap), or by a bare literal.
-- `CELL_PX` (8, C37) is the detection divisor only. It is not a cell width
+- `CELL_PX` (8, C37) is the rung-3 divisor only. It is not a cell width
   (§0's `cellWidth`), not `DEFAULT_WIDTH`, and never a field size: `width` is
-  a cell count, `cellPx` a pixel count, and the conversion happens once in
-  C46.
+  a cell count, `cellPx` a pixel count, and the rung-3 conversion happens once
+  in C46. Rung 2's divisor is `runtimeCellPx` (C52), derived per pass from the
+  renderer, and the two divisors never substitute for each other: the option
+  is read by rung 3, the renderer by rung 2.
 
 A.11 fixture contract. Each of C37–C50 carries a fits and a does-not-fit
 fixture in its row, and every A.11 row string is pinned through `panel()` with
@@ -1439,6 +1709,25 @@ W 50 (name field above the 9-cell fallback cap), and one live width change
 (`dynamic = false`); none of them pins a proportional row, and their instance
 geometry coincides with the proportional path only from `W = 29` up, where
 `T = 8` and `M = W − 18` on both paths.
+
+A.12 fixture contract. The top of the ladder moved; the field arithmetic did
+not. Every A.11 fixture passes **no `RuntimeMetrics`**, so it resolves through
+rung 3 with the same `cellPx` option and keeps its exact values byte for byte:
+T15–T23 are unchanged and are labelled rung 3 by the new contract, and C47's
+cap/floor fixtures are unchanged. C51 and C52 take injected readings in the
+pure layer (`layoutCells`, `boxCells`, `rowsCells`, `resolutionWidth`,
+`rendererColumns`) and are pinned
+with exact selector values, not row strings: the four combinations (layout
+available; resolution available; sidebar px only; nothing) each have a fits and
+a does-not-fit fixture, and C46's row carries the cross-rung discriminators
+(layout beats resolution at the same input, a zero column count falls through
+to rung 3). T24 pins rung 1 through `rowWidth` (`W`, `rung`, `accepted`), pins
+C53's dampener as two consecutive passes with the same result, pins the stale
+record and the shrink clearing it, and pins the record as the **adopted** width
+(19 at the floor, not 12). T25 pins rung 2
+against rung 3 with one sidebar pixel width and two divisors, including the
+`cellPx` option being read by rung 3 only. No A.12 fixture invents a TUI string
+and no existing string is re-measured.
 
 Fixtures for C1 that pin the section-stop rule (R7, §4, F5). Width 35;
 sections built from roles and instances as stated.- Stop rule (discriminating): role `A` with 7 instances (8 body lines), then
@@ -1861,6 +2150,77 @@ from §1.4. Charter snapshot `[coder]` or member `explore` with model
   implementation that still clips the name at 9 emits
   `" 1.design-r… Go/Kimi K3.1 P… "` (29 cells) and fails the 30-cell pin.
 
+A.11's T15–T23 pass no `RuntimeMetrics`, so every one of them resolves at
+rung 3 and keeps the value quoted above; they are rung-3 fixtures under A.12.
+
+### A.12 three-rung width scenarios (exact values)
+
+Selector-level fixtures: `rowWidth` and `selectCells` are called with injected
+readings. `declared` is the configured `width`; the gates are
+`{placement: "side", visible: true, opened: true, loaded: true}` unless stated.
+`lastAccepted` is C53's injected record (`undefined` when the fixture starts
+from a fresh activation); `accepted` is `rowWidth`'s next record.
+
+- **T24 — rung 1 wins, then the cap, the floor, and the dampener (C51, C46,
+  C47, C53).**
+  - declared 40, `{layoutCells 50}` → `selectCells = {cells 50, rung 1}`,
+    `rowWidth = {W 40, dynamic: true, rung: 1, accepted: 40}`: rung 1 measures
+    the slot box (50) and the configured width caps it. The row is T16's
+    declared-40 string `" 1.explore      Go/Kimi K3.1 Pro   "` (35 cells), i.e.
+    rung 1 and rung 3 can produce identical rows; only the selector value tells
+    them apart.
+  - declared 40, `{layoutCells 36}` with rows at 35 (`A.width - P.width = 1`) →
+    `{cells 36, rung 1}`, `W 36, accepted 36`: the strict `>` edge is the
+    smallest accepted ancestor.
+  - declared 40, `{layoutCells 28}` → `{W 28, rung 1, accepted 28}`, row
+    `" 1.explore Go/Kimi K3… "` (23 cells, T16's narrowing case).
+  - declared 40, `{layoutCells 12}` → `{W 19, rung 1, accepted 19}` (floor, not
+    12; the record is the adopted width, so it is 19, not 12).
+  - **dampener stability (C53), two passes, same result.** Declared 40.
+    Pass 1: rows 35, `boxCells 40`, `rowsCells 35`, `lastAccepted undefined`,
+    `layoutCells 40` → rung 1, `W 40`, `accepted 40`. Pass 2: rows 40,
+    `boxCells 40`, `rowsCells 40`, `layoutCells undefined` (the box only equals
+    the rows now), `lastAccepted 40` → stable box, `rung 1`, `W 40`,
+    `accepted 40`. Both passes render the 40-cell row; the pins are
+    `{W 40, rung 1}` twice, which is the absence-of-oscillation fixture. An
+    implementation without the record consults rung 2 on pass 2 and (with
+    `cssWidth 360`, resolution 1600, 100 columns → 23 cells) drifts to `W 23`
+    and back, failing the second pin.
+  - **stale dampener falls.** Rows 40, `boxCells 40`, `rowsCells 40`,
+    `lastAccepted 35` (not the rows' width) → not stable → rung 2 with
+    `cssWidth 360`, resolution 1600, 100 columns → `{cells 23, rung 2}`, `W 23`,
+    `accepted undefined`. An implementation that trusts any record keeps 35 and
+    fails the `W 23` pin.
+  - **shrink clears.** Rows 35, `boxCells 30`, `rowsCells 35`, `lastAccepted 40`
+    → not a win (30 < 35) and not stable (30 ≠ 35) → rung 2 → `{cells 23,
+    rung 2}`, `W 23`, `accepted undefined`: shrink detection still works and the
+    record cannot survive it.
+  - equality without a record falls: rows 35 in a 35-cell slot box
+    (`layoutCells undefined`) with `cssWidth 360`, resolution 1600 px and
+    terminal 100 columns → `{cells 23, rung 2}`, `W 23`; an implementation that
+    adopts the equal ancestor unconditionally (no C53 record) returns
+    `{cells 35, rung 1}` and fails.
+  - ambiguity falls through: rows 35 in a 30-cell slot box (`layoutCells`
+    `undefined`) with the T15 probe `{side, visible, opened, loaded, 280}` →
+    `{cells 35, rung 3}`, `W 35`, row
+    `" 1.explore    Go/Kimi K3.1 P… "` (T15's string).
+  - discriminator: `{layoutCells 40}` together with resolution 1600 px and 200
+    columns and `cssWidth 280` → `{cells 40, rung 1}`. An implementation that
+    asks rung 2 first returns `cells 35` and fails.
+- **T25 — rung 2 versus rung 3, and which rung reads the option (C52, C46,
+  C37).** declared 50, `cssWidth 360`:
+  - resolution 1600 px, terminal 100 columns → `runtimeCellPx = 16`,
+    `360 / 16 = 22.5 → 23` (half-up tie) → `{cells 23, rung 2}`, `W 23`.
+  - resolution `null` → `runtimeCellPx undefined`, rung 3 with the option 8 →
+    `360 / 8 = 45` → `{cells 45, rung 3}`, `W 45`.
+  - option `cellPx: 10` **with** the resolution present → still
+    `{cells 23, rung 2}`: rung 2 never reads the option. The same input with
+    resolution `null` → `360 / 10 = 36` → `{cells 36, rung 3}`, which is how the
+    fixture proves which rung owns the option.
+  - terminal 100 columns but `rendererColumns 0` → rung 2 `undefined` → rung 3
+    → `{cells 45, rung 3}`; a rung-2 implementation that divides by 0 yields
+    `Infinity`/`NaN` and fails the exact value.
+
 ## 7. Known gaps
 
 Where the current code, read-only, disagrees with this design. Each gap is a
@@ -2029,19 +2389,32 @@ traceability, not as a task.
   second unknown constant. `PanelRow`, the TUI (`src/tui.tsx:344`), every width
   constant, and all C1–C34 values are unchanged. Fixtures T6–T14 pin the exact
   strings.
-- **G23 (R5, A.11)** — The TUI passes `width={() => options.width}`
-  (`src/tui.tsx:495`) and `panel()` only raises it to `MIN_ROW_CELLS`
-  (`src/lib/collect.ts:448-458`); `roleHead`/`instanceHead` always use the
-  fallback complements, no `cellPx` option is read, and `usePanel()` is never
-  called. Required: read the probe inside the guarded memo (§1.4), add
-  `cellPx` with the C37 default (finite and `> 0`, else 8), pass the detected
-  `W` and the `dynamic` flag into `panel()`
-  (`panel(sources, sessionID, width, maxLines, now, graceMs, dynamic = false)`,
-  so today's call sites and fixtures keep the fallback path), and take the
-  C48/C49 splits in `roleHead`/`instanceHead`. Untouched: R6 bars, tones and
-  glyphs, every C1–C36 value, the A.8 member snapshot, the A.9 tag text, the
-  A.10 comparison, and G16's sync gate (width detection reads no data and
-  triggers no sync).
+- **G23 (R5, A.11) — closed in code; references refreshed.** The A.11 path is
+  implemented: the probe is read inside the guarded memo (`src/tui.tsx:290-322`),
+  `cellPx` is read with the C37 default (`resolveCellPx`,
+  `src/lib/collect.ts:487`), `rowWidth` and the selector live in
+  `src/lib/collect.ts:501-537`, `panel()` takes the `dynamic` flag
+  (`:707`) and `roleHead`/`instanceHead` take the C48/C49 splits
+  (`:591-628`). The obligations recorded here stand as the shape of the A.12
+  change: detection feeds `W` and `dynamic` into `panel()`, and the field
+  arithmetic stays in the pure layer.
+- **G24 (R5, A.12)** — The ladder is A.11's, not R5's current three rungs:
+  detection has one path (sidebar pixels ÷ the `cellPx` option) and never reads
+  the renderer, so the panel under-fills by the difference between the assumed
+  8 px/cell and the terminal's real cell size. Required: add the pure
+  `RuntimeMetrics` (`layoutCells`, `boxCells`, `rowsCells`, `resolutionWidth`,
+  `rendererColumns`),
+  `runtimeCellPx` (C52), the ladder selector (C46) and the C53 dampener;
+  extend `rowWidth` with the optional metrics and the `lastAccepted` record,
+  returning `accepted`; capture the full-mode
+  `<text>` by `ref` and read `parent.width`/`node.width` per pass under the
+  C51 rule, with one bump per new node instance (`if (node !== panelNode)`; the
+  inner full-mode component clears `panelNode` in `onCleanup`); read
+  `context.renderer.resolution?.width` and `context.renderer.width` in the same
+  try; subscribe once to `context.renderer.on("resize", bump)` and release it
+  with `onCleanup`. The `cellPx` option stays, read by rung 3 only. Untouched:
+  the C38–C50 splits, every C1–C50 value, the A.8 snapshot, the A.9 tag, the
+  A.10 comparison, `FILL_BANDS`, glyphs, tones, and G16's sync gate.
 - **D1 debug option (temporary diagnostic, not in the contract).** The plugin
   accepts `debug: true` or `debug: "<path>"` and appends one JSONL record per
   recompute to `/tmp/opencode/subagent-model-debug.jsonl`; the string form
@@ -2063,7 +2436,8 @@ are the new decisions A.3 forces; F23 is settled (human decision A.4); F24 is
 settled (human decision A.5); F20 is obsolete at A.6 (human decision).
 F25–F28 are the new points A.8 surfaces; F29–F30 are the new points A.10
 surfaces; F31–F36 are A.11's points, settled by PM arbitration (F31 by the
-Product amendment to R2). F16, F17, F20, F23 and
+Product amendment to R2); F37 is A.12's ladder-units and rung-1-authority
+reading, settled by PM arbitration. F16, F17, F20, F23 and
 F24 are listed with their source rather than as requests for an answer.
 
 - **F1 (R5 width domain).** R5 gives no lower bound on `width`. Below 19 cells
@@ -2287,12 +2661,32 @@ F24 are listed with their source rather than as requests for an answer.
   preference every side panel shares" (CSS px). It measures the inner sidebar
   region, which may include frame chrome — padding, borders, the reserved
   region toggle — and the design treats it as the slot content width without
-  subtracting padding (§1.4). No padding constant is added; `cellPx` is the
-  calibration knob for that drift.
+  subtracting padding (§1.4). No padding constant is added, and the calibration
+  knob is **rung 3's `cellPx` only** — the pixel path on the fallback side of
+  the ladder. Rungs 1 and 2 cannot be calibrated with it: rung 1 is a layout
+  cell count with no pixel conversion, and rung 2's divisor is measured from
+  the renderer (C52), never from the option.
 - **F36 (R5, rounding tie rule) — settled: half-up.** Product says "rounded"
   and "40% rounded" without a tie rule. The design fixes half-up everywhere —
   the share (C40, C41) and the pixel division (C46), where a tie `x.5` rounds
   up: `260 px / 8 = 32.5 → 33`, `rest 25 × 2/5 = 10.0 → 10`.
+- **F37 (R5, A.12 ladder units and rung-1 authority) — settled by PM
+  arbitration.** Two readings, both confirmed. (1) **Rung 2 semantics:** the
+  runtime cell width is the **divisor**; the row width's pixel source stays
+  the host's sidebar px, i.e. rung 2 uses the same px source as rung 3 and
+  takes only the divisor from the renderer instead of the 8-pixel assumption
+  (C52, C46). R5's "device pixels ÷ renderer cell columns" names that divisor,
+  and a px/cell ratio alone could not produce a row width. (2) **Rung 1
+  equality:** `A.width === P.width` is never authority; it is the **stable
+  box** (C53). An equal ancestor is honoured only when a rung-1 win in this
+  activation already recorded that exact width (`lastAccepted === rowsCells`);
+  then the pass keeps `W` and no rung-2 consult happens. Otherwise — no record,
+  a stale record, a shrink, an unreadable box — the pass falls to rung 2 and
+  the record clears. That combination preserves the anti-latch rationale (a
+  fallback-path pass cannot invent a record) and removes the rung-1 ↔ rung-2
+  two-cycle the pure fall-through rule allowed at the box-equals-rows boundary
+  (C51, C53, T24). The C51 accept condition stays strict
+  (`A.width > P.width`).
 
 ## 9. Revision notes
 
@@ -2490,3 +2884,65 @@ F24 are listed with their source rather than as requests for an answer.
   settled as a caveat: `sidebar.width()` may include frame chrome, no padding
   is subtracted, `cellPx` is the calibration knob. **F36** settled: half-up,
   with a tie `x.5` rounding up stated in §1.4 and C46.
+- **A.12 calibrated-width amendment.** Human decision at the R5 level (A.11
+  upgraded): the row width is measured by a three-rung ladder, in this order,
+  instead of by one pixel division. **Rung 1** is the renderer's layout tree
+  read in terminal cells (C51): the full-mode panel `<text>` is captured by
+  `ref`, its immediate parent (the host's slot boundary box) supplies
+  `parent.width`, and the read is authoritative when that width is finite,
+  positive, not the renderer root, and **strictly wider** than the panel's own
+  width. The read is per pass inside the guarded memo, and a
+  throw is a silent fallback; the only stored value is the C53 record, a width
+  the panel already adopted. **Rung 2** measures pixels-per-cell from
+  `renderer.resolution.width / renderer.width` (C52) and divides the sidebar
+  pixel width by it — the same px source as rung 3, only the divisor comes from
+  the renderer instead of the 8-pixel assumption — so a tie rounds up like
+  every other width step.
+  **F37 settled (PM arbitration):** rung 2 keeps the sidebar px source, and
+  rung 1 equality is **not** authority. It is the stable box (C53): an equal
+  ancestor keeps the width a rung-1 win already recorded in this activation
+  (`lastAccepted === rowsCells`), and otherwise — no record, stale record,
+  shrink, unreadable box — the pass falls to rung 2 and the record clears. This
+  keeps the anti-latch rationale (a fallback-path pass cannot invent a record)
+  and makes anti-oscillation provable in both directions: the box read
+  re-enters every pass and only a strict win writes the record, while shrink
+  (`A < P`) clears it, so the rung-1 ↔ rung-2 cycle at the 40-versus-35
+  boundary is gone by construction (pass 1 35→40, pass 2 keeps 40).
+  **The record** is a single number in the TUI, per activation, never
+  persisted, never a signal, assigned every pass from `rowWidth`'s `accepted`,
+  and `accepted` is `undefined` on every non-rung-1 outcome (so it clears on
+  unused). It is not the A.8 member snapshot and does not touch G16.
+  **Detach settle (arbitration, option 1):** the ref compares **node
+  identity** — SDK refs fire on mount only (`@opentui/solid/index.js:430`,
+  `:884`; `_removeNode` `:557` never calls back), so a different node object is
+  a new full-mode mount and bumps once — and the inner full-mode component
+  clears the pointer in `onCleanup`, so compact swaps and sidebar closes leave
+  no detached-node read.
+  **Rung 3** keeps A.11's `sidebar px / CELL_PX` (C37) as the last resort.
+  **The option:** `cellPx` survives as the rung-3 divisor — a manual brake and
+  a test override; rung 2 never reads it, so a user-set value no longer moves
+  a panel whose terminal reports its pixel size. **Arithmetic unchanged:**
+  C38–C50, every split/share/floor, `MIN_ROW_CELLS = 19`, the `width` cap,
+  `FILL_BANDS`, `barFill`/`barTone`, the glyphs, the A.8 snapshot, the A.9 tag,
+  the A.10 comparison, and G16's sync gate. **Fixtures:** C46 is rewritten as
+  the selector and gains cross-rung discriminators; C47 keeps its formula with
+  the rung and record passed through; C51, C52 and C53 are new and pinned with
+  injected readings on both sides; T24 pins rung 1 through `rowWidth`, pins the
+  dampener as two consecutive passes with the same result, pins the stale
+  record falling and the shrink clearing it, and T25 pins rung 2
+  against rung 3 and pins that the option belongs to rung 3. Every A.11
+  fixture (T15–T23) passes no `RuntimeMetrics` and keeps its exact value at
+  rung 3, so no existing string moved. **Invalidation:** one
+  `renderer.on("resize", bump)` per activation, released on the activation's
+  dispose path, plus
+  the existing reactive `sidebar.width()` read; no polling, no width cache, no
+  signal holding a width. **Why:** the observed 2-cell under-fill is the gap
+  between the assumed 8 px/cell and the terminal's real cell size; rung 1
+  removes both the assumption and the conversion, and rung 2 keeps a measured
+  divisor where the layout tree is ambiguous. **Moved:** R5 (dynamic-width
+  bullet), §0 (`head` width note), §1 (`W` definition), §1.4 (rewritten:
+  ladder, both SDK surfaces, C51 rule, C53 dampener, rung 2/3, pure selector,
+  TUI read, invalidation, bootstrap, R11), §2 (renderer source row, frame row
+  relabelled, detection paragraph), §5 (A.12 measurement sentence), §6 (intro,
+  C37, C46, C47, C51, C52, C53, the A.12 fixture contract, `### A.12`
+  scenarios), §7 (G23 closed in code, new G24), §8 (F35 wording, F37).

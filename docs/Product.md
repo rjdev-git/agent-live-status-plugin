@@ -105,14 +105,20 @@ Both row shapes are exactly `width` cells wide; the boxes always occupy the
 last 5 columns, aligned across rows.
 
 - `width` option, default 35 cells.
-- Dynamic width (human decision A.11): the panel derives its row width from
-  the host's reactive sidebar width in CSS pixels divided by the `cellPx`
-  option (default 8), rounded. The configured `width` stays as the fallback
-  when detection is unavailable and as the cap when detection succeeds — the
-  panel is never wider than the `width` option. Detection is unavailable
-  while the host reports no width (not loaded, sidebar closed/transitioning,
-  or the panel not rendered in the side region); then the configured `width`
-  governs, floor `MIN_ROW_CELLS` as before.
+- Dynamic width (human decision A.11, upgraded by A.12): the panel derives
+  its row width from the host's rendered environment, never from a
+  per-install config constant (A.12). Cell width is measured at runtime, in
+  this priority order, all steps automatic: (1) the renderer's own layout
+  tree, read in terminal cells — the authoritative value, since the panel
+  lives inside it; (2) device pixels ÷ renderer cell columns, where terminal
+  pixel resolution is reported; (3) the host's sidebar width in pixels ÷ the
+  last-resort 8-pixels-per-cell assumption. The configured `width` stays as
+  the fallback when every measurement path fails and as the cap when any
+  succeeds — the panel is never wider than the `width` option. Detection is
+  unavailable while none of the three paths produces a value (not loaded,
+  sidebar closed/transitioning, or the panel not rendered in the side
+  region); then the configured `width` governs, floor `MIN_ROW_CELLS` as
+  before.
 - Proportional fields (A.11): on a role row the "rest" (width − 3 number − 1
   gap − 1 separator − 5 boxes) splits between the name field and the model
   field — name gets 40% rounded, model gets the remainder. On an instance

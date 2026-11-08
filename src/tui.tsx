@@ -4,7 +4,7 @@ import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
 import { usePanel } from "@opencode/plugin/gui"
 import type { ResolvedTheme } from "@opencode/theme/tui"
-import { parseColor, type RGBA } from "@opentui/core"
+import { parseColor, type RGBA, type TextRenderable } from "@opentui/core"
 import type { JSX } from "@opentui/solid"
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import {
@@ -33,6 +33,7 @@ import {
   type MemberSet,
   type PanelRow,
   type RunningSubagent,
+  type RuntimeMetrics,
   type Sources,
   type WidthProbe,
 } from "./lib/collect"
@@ -244,6 +245,26 @@ function isVisibleChild(
   return agent !== undefined && isVisibleRole(agent)
 }
 
+/**
+ * Reads the source once for a panel pass and queues every in-scope instance's
+ * message sync (G16). The full-mode view and the compact count share it, so the
+ * gate and the diagnostic dump have one code path.
+ */
+function readInstances(
+  context: Context,
+  sessionID: string | undefined,
+  bump: () => void,
+  members?: MemberSet,
+  debug?: string,
+) {
+  const data = sources(context, members)
+  const rows = sessionID ? collect(data, sessionID) : []
+  if (debug) debugDump(data, sessionID, debug)
+  for (const row of rows) void syncSession(context, row.sessionID, bump)
+  // `total` is `panel()`'s member-role count, so compact shares the full gate.
+  return { data, rows, total: data.members?.roles.length ?? 0 }
+}
+
 /** Box colour: the pure single-tone result mapped onto the theme (R6, C21). */
 function barColor(theme: ResolvedTheme, filled: number) {
   return barTone(filled) === "success" ? theme.text.feedback.success.base : theme.text.muted
@@ -271,20 +292,37 @@ function Seg(props: { fg: RGBA | string; children: string }) {
 
 type GoodView = ReturnType<typeof panel>
 
-function Status(props: {
+/**
+ * Per-activation render state shared by the full-mode panel and the compact
+ * line: the last good view (R11), the last running count (the compact
+ * fallback), and the last reported failure (one toast per message).
+ */
+type GoodState = {
+  view?: GoodView
+  running?: number
+  total?: number
+  failure?: string
+}
+
+/**
+ * Full-mode panel. It owns the layout handle for the C51 read: the ref fires on
+ * mount only, so node identity — never absence — is the mount signal, and this
+ * subtree's cleanup clears the handle when compact wins or the region goes.
+ */
+function FullPanel(props: {
   context: Context
   sessionID?: string
   tick: () => number
   bump: () => void
-  compact: () => boolean
   width: () => number
   cellPx: () => number
   members: () => MemberSet | undefined
   debug?: string
+  state: GoodState
+  lastAccepted: () => number | undefined
+  accept: (next?: number) => void
 }) {
   const [beat, setBeat] = createSignal(0)
-  let lastGood: { view: GoodView; running: number } | undefined
-  let lastFailure: string | undefined
 
   // §1.4: a slot outside `Panel.render` throws here; detection then degrades to
   // the configured-width path instead of the R11 toast (F34).
@@ -295,6 +333,24 @@ function Status(props: {
       return undefined
     }
   })()
+
+  // §1.4: one layout handle, never a width value.
+  let panelNode: TextRenderable | undefined
+  // Refs fire on mount only (@opentui/solid/index.js:430, :884); the removal
+  // path never calls back (_removeNode, :557). A different node is a new
+  // full-mode mount and bumps once; a repeated call for the same node does
+  // nothing.
+  const attachPanel = (node: TextRenderable) => {
+    if (node !== panelNode) {
+      panelNode = node
+      props.bump()
+    }
+  }
+  // Compact swap, sidebar close, or region teardown unmounts this subtree:
+  // clear the handle so no pass reads a detached node (§7 G24).
+  onCleanup(() => {
+    panelNode = undefined
+  })
 
   // Source reads and view building share one guard: a thrown error keeps the
   // last good view, reports once per message, and never blanks the slot (R11).
@@ -319,32 +375,77 @@ function Status(props: {
           return undefined
         }
       })()
-      const { W, dynamic } = rowWidth(props.width(), props.cellPx(), probe)
-      const data = sources(props.context, props.members())
-      const view = panel(data, props.sessionID, W, BODY_MAX_LINES, Date.now(), GRACE_MS, dynamic)
-      // Every running instance in scope: queue its sync so the bar fills once it lands (G16).
-      // The gate stays member-independent so a temporary builtin's bar fills (G20).
-      const runningRows = props.sessionID ? collect(data, props.sessionID) : []
-      if (props.debug) debugDump(data, props.sessionID, props.debug)
-      for (const row of runningRows) void syncSession(props.context, row.sessionID, props.bump)
+      // §1.4: one read of `A.width` per pass, projected twice (C51 truth,
+      // C53 equality); `rowsCells` is the node's own separate getter read.
+      const metrics: RuntimeMetrics | undefined = (() => {
+        try {
+          const renderer = props.context.renderer
+          const parent = panelNode?.parent ?? undefined
+          const boxCells =
+            panelNode &&
+            parent &&
+            parent !== renderer.root &&
+            Number.isFinite(parent.width) &&
+            parent.width > 0
+              ? parent.width
+              : undefined
+          return {
+            layoutCells:
+              panelNode && boxCells !== undefined && boxCells > panelNode.width
+                ? boxCells
+                : undefined,
+            boxCells,
+            rowsCells: panelNode?.width,
+            resolutionWidth: renderer.resolution?.width,
+            rendererColumns: renderer.width,
+          }
+        } catch {
+          // A width failure is a fallback, never a toast.
+          return undefined
+        }
+      })()
+      const { W, dynamic, accepted } = rowWidth(
+        props.width(),
+        props.cellPx(),
+        probe,
+        metrics,
+        props.lastAccepted(),
+      )
+      props.accept(accepted)
+      const { data, rows: runningRows } = readInstances(
+        props.context,
+        props.sessionID,
+        props.bump,
+        props.members(),
+        props.debug,
+      )
+      const view = panel(
+        data,
+        props.sessionID,
+        W,
+        BODY_MAX_LINES,
+        Date.now(),
+        GRACE_MS,
+        dynamic,
+      )
       // Compact counts running subagents; the title counts roles with a working
       // instance. Two fields, two derivations, never one shared value (R1).
-      const running = runningRows.length
-      lastFailure = undefined
-      lastGood = { view, running }
-      return lastGood
+      props.state.running = runningRows.length
+      props.state.total = view.total
+      props.state.failure = undefined
+      props.state.view = view
+      return view
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      if (message !== lastFailure) {
-        lastFailure = message
+      if (message !== props.state.failure) {
+        props.state.failure = message
         props.context.ui.toast.show({ message })
       }
-      return lastGood
+      return props.state.view
     }
   })
 
-  const view = () => guarded()?.view
-  const running = () => guarded()?.running ?? 0
+  const view = () => guarded()
 
   // A failed row expires on a clock, not on an event: tick once per second
   // for as long as any row sits inside the 30s grace window.
@@ -363,34 +464,133 @@ function Status(props: {
     >
       {(current) => (
         <Show when={current().total > 0}>
-          <Show
-            when={!props.compact()}
-            fallback={
-              <text fg={theme.text.feedback.success.base}>{`sub ${running()}`}</text>
-            }
-          >
-            <text wrapMode="none">
-              <span style={{ fg: theme.text.base } as never}>
-                {`Project Team Members ${current().working}/${current().total}`}
-              </span>
-              <For each={current().rows}>
-                {(row) => (
-                  <>
-                    <br />
-                    <Seg fg={rowColor(theme, row)}>{row.head}</Seg>
-                    <Seg fg={barColor(theme, row.filled)}>{BAR_GLYPH_FILLED.repeat(row.filled)}</Seg>
-                    <Seg fg={theme.text.muted}>{BAR_GLYPH_EMPTY.repeat(BAR_CELLS - row.filled)}</Seg>
-                  </>
-                )}
-              </For>
-              <Show when={current().more > 0}>
-                <br />
-                <span style={{ fg: theme.text.muted } as never}>{`+${current().more} more · /subagents`}</span>
-              </Show>
-            </text>
-          </Show>
+          <text wrapMode="none" ref={attachPanel}>
+            <span style={{ fg: theme.text.base } as never}>
+              {`Project Team Members ${current().working}/${current().total}`}
+            </span>
+            <For each={current().rows}>
+              {(row) => (
+                <>
+                  <br />
+                  <Seg fg={rowColor(theme, row)}>{row.head}</Seg>
+                  <Seg fg={barColor(theme, row.filled)}>{BAR_GLYPH_FILLED.repeat(row.filled)}</Seg>
+                  <Seg fg={theme.text.muted}>{BAR_GLYPH_EMPTY.repeat(BAR_CELLS - row.filled)}</Seg>
+                </>
+              )}
+            </For>
+            <Show when={current().more > 0}>
+              <br />
+              <span style={{ fg: theme.text.muted } as never}>{`+${current().more} more · /subagents`}</span>
+            </Show>
+          </text>
         </Show>
       )}
+    </Show>
+  )
+}
+
+/**
+ * Compact line: `sub N`, with the R11 fallback and the same per-activation
+ * failure dedupe. Compact does no width arithmetic and captures no node.
+ */
+function CompactLine(props: {
+  context: Context
+  sessionID?: string
+  tick: () => number
+  bump: () => void
+  members: () => MemberSet | undefined
+  debug?: string
+  state: GoodState
+}) {
+  const current = createMemo(() => {
+    props.tick()
+    try {
+      const { rows, total } = readInstances(
+        props.context,
+        props.sessionID,
+        props.bump,
+        props.members(),
+        props.debug,
+      )
+      props.state.running = rows.length
+      props.state.total = total
+      props.state.failure = undefined
+      return { running: rows.length, total }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (message !== props.state.failure) {
+        props.state.failure = message
+        props.context.ui.toast.show({ message })
+      }
+      if (props.state.running === undefined) return undefined
+      return { running: props.state.running, total: props.state.total ?? 0 }
+    }
+  })
+
+  const theme = props.context.theme
+
+  return (
+    <Show
+      when={current()}
+      fallback={<text fg={theme.text.muted}>subagent status unavailable</text>}
+    >
+      {(result) => (
+        <Show when={result().total > 0}>
+          <text fg={theme.text.feedback.success.base}>{`sub ${result().running}`}</text>
+        </Show>
+      )}
+    </Show>
+  )
+}
+
+function Status(props: {
+  context: Context
+  sessionID?: string
+  tick: () => number
+  bump: () => void
+  compact: () => boolean
+  width: () => number
+  cellPx: () => number
+  members: () => MemberSet | undefined
+  debug?: string
+}) {
+  // §1.4 / C53: one adopted-width record per activation, held here so a compact
+  // swap (FullPanel unmount) does not reset the dampener.
+  let lastAccepted: number | undefined
+  // R11 state is per activation too, so a compact/full swap keeps the last good
+  // result and the deduplicated failure.
+  const state: GoodState = {}
+
+  return (
+    <Show
+      when={!props.compact()}
+      fallback={
+        <CompactLine
+          context={props.context}
+          sessionID={props.sessionID}
+          tick={props.tick}
+          bump={props.bump}
+          members={props.members}
+          debug={props.debug}
+          state={state}
+        />
+      }
+    >
+      <FullPanel
+        context={props.context}
+        sessionID={props.sessionID}
+        tick={props.tick}
+        bump={props.bump}
+        width={props.width}
+        cellPx={props.cellPx}
+        members={props.members}
+        debug={props.debug}
+        state={state}
+        lastAccepted={() => lastAccepted}
+        accept={(next) => {
+          lastAccepted = next
+        }}
+      />
     </Show>
   )
 }
@@ -484,6 +684,9 @@ export default Plugin.define({
 
     const [tick, setTick] = createSignal(0)
     const bump = () => setTick((value) => value + 1)
+    // §1.4: one layout invalidation per activation; getter reads do not
+    // subscribe, so the renderer's resize event is the terminal trigger.
+    context.renderer.on("resize", bump)
     const stops = WATCHED_EVENTS.map((type) => context.data.on(type, bump))
     // New child sessions and executions of a visible role load their usage so
     // the bars have data to read (G16, section 2). Root and unknown-agent
@@ -568,6 +771,7 @@ export default Plugin.define({
     }))
 
     return () => {
+      context.renderer.off("resize", bump)
       for (const stop of [...stops, ...syncStops]) stop()
       removeSlot()
     }

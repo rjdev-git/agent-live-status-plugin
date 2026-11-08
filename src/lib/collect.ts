@@ -507,34 +507,139 @@ export type WidthProbe = {
 }
 
 /**
- * C46: the detected cell count, or `undefined` when detection is unavailable:
- * no probe, a non-side placement, a hidden/closed/unloaded sidebar, or a
- * non-finite/non-positive CSS width.
+ * A.12: renderer-derived readings only, injected as plain data so the ladder
+ * is testable without the SDK (§1.4).
+ */
+export type RuntimeMetrics = {
+  /** C51: rung-1 cell count, strictly wider than the rows. */
+  layoutCells?: number
+  /** C53: one read of `A.width`, compared to `rowsCells`. */
+  boxCells?: number
+  /** C53: `P.width`, a separate read of the panel node. */
+  rowsCells?: number
+  /** Device pixels across the terminal (`renderer.resolution`). */
+  resolutionWidth?: number
+  /** Terminal columns (`renderer.width`). */
+  rendererColumns?: number
+}
+
+/** C46: the shared gates for every rung and for the C53 stable box. */
+function detectionGates(probe: WidthProbe | undefined): probe is WidthProbe {
+  return (
+    probe !== undefined &&
+    probe.placement === "side" &&
+    probe.visible &&
+    probe.opened &&
+    probe.loaded
+  )
+}
+
+/** C52: device pixels per terminal cell, the rung-2 divisor. */
+export function runtimeCellPx(metrics: RuntimeMetrics | undefined): number | undefined {
+  if (!metrics) return undefined
+  const resolution = metrics.resolutionWidth
+  const columns = metrics.rendererColumns
+  if (
+    typeof resolution !== "number" ||
+    !Number.isFinite(resolution) ||
+    resolution <= 0 ||
+    typeof columns !== "number" ||
+    !Number.isFinite(columns) ||
+    columns <= 0
+  ) {
+    return undefined
+  }
+  return resolution / columns
+}
+
+/**
+ * C46: the first rung that produces a value — the layout tree, then sidebar
+ * pixels divided by the runtime cell size, then sidebar pixels divided by the
+ * last-resort `CELL_PX`. The `cellPx` option is read by rung 3 only.
+ */
+export function selectCells(
+  probe: WidthProbe | undefined,
+  metrics: RuntimeMetrics | undefined,
+  fallbackCellPx: number,
+): { cells: number; rung: 1 | 2 | 3 } | undefined {
+  if (!detectionGates(probe)) return undefined
+
+  const layout = metrics?.layoutCells
+  if (typeof layout === "number" && Number.isFinite(layout) && layout > 0) {
+    return { cells: roundHalfUp(layout), rung: 1 }
+  }
+
+  const px = runtimeCellPx(metrics)
+  if (px !== undefined && Number.isFinite(probe.cssWidth) && probe.cssWidth > 0) {
+    return { cells: roundHalfUp(probe.cssWidth / px), rung: 2 }
+  }
+
+  if (Number.isFinite(probe.cssWidth) && probe.cssWidth > 0) {
+    return { cells: roundHalfUp(probe.cssWidth / resolveCellPx(fallbackCellPx)), rung: 3 }
+  }
+
+  return undefined
+}
+
+/**
+ * C37's rung-3 projection: the sidebar pixels divided by the option's pixels
+ * per cell, or `undefined` when detection is unavailable. Kept as the C37
+ * fixture entry point; the ladder itself is `selectCells` (C46).
  */
 export function detectedCells(
   probe: WidthProbe | undefined,
   cellPx: number,
 ): number | undefined {
-  if (!probe) return undefined
-  if (probe.placement !== "side") return undefined
-  if (!probe.visible || !probe.opened || !probe.loaded) return undefined
-  if (!Number.isFinite(probe.cssWidth) || probe.cssWidth <= 0) return undefined
-  return roundHalfUp(probe.cssWidth / resolveCellPx(cellPx))
+  return selectCells(probe, undefined, cellPx)?.cells
 }
 
 /**
- * C47: `W` is the detected cell count capped by the declared width and floored
- * at `MIN_ROW_CELLS`; an unavailable detection leaves the declared width.
+ * C47 (with the C53 record): `W` is the selected cell count capped by the
+ * declared width and floored at `MIN_ROW_CELLS`; an unavailable detection
+ * leaves the declared width. A rung-1 win records its clamped width; a stable
+ * box keeps the record; every other outcome clears it.
  */
 export function rowWidth(
-  declaredWidth: number,
+  declaredWidth: number | undefined,
   cellPx: number,
   probe?: WidthProbe,
-): { W: number; dynamic: boolean } {
-  const declared = effectiveWidth(declaredWidth)
-  const detected = detectedCells(probe, cellPx)
-  if (detected === undefined) return { W: declared, dynamic: false }
-  return { W: effectiveWidth(Math.min(declared, detected)), dynamic: true }
+  metrics?: RuntimeMetrics,
+  lastAccepted?: number,
+): { W: number; dynamic: boolean; rung?: 1 | 2 | 3; accepted?: number } {
+  const declared = effectiveWidth(declaredWidth ?? DEFAULT_WIDTH)
+  const clamp = (value: number) => Math.max(MIN_ROW_CELLS, Math.min(declared, value))
+  const detected = selectCells(probe, metrics, cellPx)
+  const stable =
+    detectionGates(probe) &&
+    metrics !== undefined &&
+    metrics.boxCells === metrics.rowsCells &&
+    lastAccepted !== undefined &&
+    lastAccepted === metrics.rowsCells
+
+  let W: number
+  let rung: 1 | 2 | 3 | undefined
+  let accepted: number | undefined
+  if (detected?.rung === 1) {
+    W = clamp(detected.cells)
+    rung = 1
+    accepted = W
+  } else if (stable) {
+    W = clamp(lastAccepted)
+    rung = 1
+    accepted = lastAccepted
+  } else {
+    W = detected === undefined ? declared : clamp(detected.cells)
+    rung = detected?.rung
+    accepted = undefined
+  }
+
+  const result: { W: number; dynamic: boolean; rung?: 1 | 2 | 3; accepted?: number } = {
+    W,
+    dynamic: rung !== undefined,
+  }
+  if (rung !== undefined) result.rung = rung
+  if (accepted !== undefined) result.accepted = accepted
+  return result
 }
 
 /** One row shape's field sizes: the leading field and the model field. */
