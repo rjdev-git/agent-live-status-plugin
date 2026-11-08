@@ -29,11 +29,14 @@ testable from plain data.
   either running (**active**) or inside the failure grace window (**grace**).
 - **Body** — the role and instance lines under the title. The title and the
   overflow line are not body lines.
+- **Speed (`tps`)** — output tokens per second of one instance, computed from
+  its own assistant messages only (§2, R6). Finite and non-negative or
+  unknown; never a percentage, never derived from `limit.context`.
 - **View** — the pure output of `panel()`:
 
   ```ts
   {
-    rows: Array<{ head: string; filled: number; pct?: number;
+    rows: Array<{ head: string; filled: number; tps?: number;
                   state: "idle" | "active" | "grace"; agentColor?: string }>
     more: number        // folded body lines
     working: number     // roles with an active instance
@@ -42,9 +45,10 @@ testable from plain data.
   ```
 
   `head` is the whole row except the bar and is exactly `width - 5` cells.
-  `filled` is 0–5. `pct` is the percentage the fill was derived from; a role
-  row carries the busiest instance's percentage, an idle role row carries
-  `undefined`.
+  `filled` is 0–5. `tps` is the speed the fill was derived from; a role row
+  carries the busiest **active** instance's speed, an idle role row carries
+  `undefined`, and a grace row carries `undefined` because a finished session
+  has no live speed (F18).
 - The panel renders while `total > 0`; at `total = 0` the slot renders
   nothing.
 
@@ -98,7 +102,7 @@ currently viewed (other tabs' sessions are invisible here).
 - Indented under the role with tree glyphs `├` (more follow) and `└` (last).
   Unnumbered.
 - Fields in order: session title (max 8 cells, clipped with `…`), model
-  short label (max 12 cells via R5's split rule), context bar (5 boxes).
+  short label (max 13 cells via R5's split rule), speed bar (5 boxes, R6).
 - Colour: same rule as the working role row.
 - A succeeded instance disappears immediately: its row collapses back into
   the role row. A failed or interrupted instance does not: it follows R4's
@@ -116,7 +120,7 @@ Rules:
 - Title = `cleanTitle(session.title ?? session.id)` (whitespace collapsed to
   single spaces, trimmed), clipped to 8 cells, padded to 8.
 - Instance model = R8 resolution for that session, rendered as the short
-  label, clipped to 12 cells by the R5 split rule, then padded to the model
+  label, clipped to 13 cells by the R5 split rule, then padded to the model
   column.
 - "Finished" means status is no longer `running`. A succeeded session has no
   row at any age. Failed and interrupted sessions are the R4 exception and
@@ -151,7 +155,9 @@ Design decisions:
 - A role with one active and one grace instance is active: role text uses the
   agent colour, the grace instance keeps warning, the active instance keeps
   the agent colour.
-- Grace role rows show empty boxes (no instance is working; F12).
+- Grace role rows show empty boxes (no instance is working; F12). A grace
+  instance row shows empty boxes too: a finished session has no live speed
+  (F18).
 - The ticker lives in the TUI, not in the pure layer: the layer receives
   `now` as a parameter. The UI starts one `setInterval` of `GRACE_TICK_MS`
   when a rendered row has `state === "grace"`, bumps a signal each tick, and
@@ -166,49 +172,76 @@ last 5 columns, aligned across rows.
 - Model label rule: when `Provider/Model` overflows its field, the provider
   keeps at most half of it, and the model name gets whatever remains; the
   whole label clips to `field - 1` characters plus `…`.
-- Role field: number 3 + name 9 + space 1 + model (width - 19, capped at 20)
-  + gap 1 + boxes 5.
+- Role field: number 3 + name 9 + space 1 + model (width - 18, capped at 20)
+  + boxes 5. At the default width the model field is 17 cells.
 - Instance field: indent 3 (space, glyph, space) + title 8 + space 1 + model
-  12 + padding to align + gap 1 + boxes 5.
+  13 + padding to align + boxes 5.
+- Boxes are tight: no gap cell before either row's boxes. The freed cell
+  belongs to that row's model column, which is why the role column is
+  `width - 18` and the instance column `width - 17`.
 - `One constant, one meaning`: each field has its own named constant; one
   constant never serves a second field.
 
 The cell-by-cell arithmetic is §1. The cap in "capped at 20" is applied to
-the model **label text**; the model **column** stays `width - 19` so the row
-is exactly `width` cells for widths above 39 as well (F1). Below 30 cells the
-instance model text shrinks below 12 to keep the row exactly `width` (F1).
+the model **label text**; the model **column** stays `width - 18` so the row
+is exactly `width` cells for widths above 38 as well (F1). The instance model
+**text** is 13 cells at every width where the column allows it; above 35 the
+extra column cells become padding (F21). Below 30 cells the instance model
+text shrinks below 13 to keep the row exactly `width` (F1).
 
-## R6 — Context bar
+## R6 — Speed bar
 
-- `filled = round(pct × 5 / 100)`, clamped 0-5.
-- Fill colours: success under 50%, warning 50-69%, error 70% or more,
-  independent of the row text colour. Unknown usage: empty muted boxes.
-- `pct = (input + cache.read) of the newest message that reports tokens`
-  divided by the model's `limit.context`. Cumulative session tokens are
-  never used (they do not fall after compaction).
-- A working role row's box mirrors its busiest instance's fill; idle roles
-  show empty boxes.
+- `filled = clamp(round(tps / 20), 0-5)`; `20` tokens/sec fill one box, so
+  `TPS_PER_BOX = 20` (C18, C19).
+- All filled boxes use the theme's success green. No warning ramp: speed has
+  no pressure semantics. Unknown speed renders empty muted boxes.
+- Speed = output tokens produced divided by the wall time producing them,
+  measured over the instance's assistant messages (§2), recomputed when a new
+  message arrives or on the 1-second ticker (G17).
+- A working role row's box mirrors its busiest **active** instance's speed;
+  idle roles show empty boxes.
+- Removed with the context bar: the token percentage, the 50/70 colour bands,
+  and every rule that needed `limit.context`. The G16 sync requirement
+  survives untouched — messages still feed the boxes.
 
 Design decisions:
 
-- `pct` is not clamped: usage above the limit reports above 100 (G8). The
-  **fill** is clamped to 0–5, so over-limit still renders five filled boxes.
-- "Newest message that reports tokens": scan
-  `sessions.message.list(sessionID)` from the end; the first entry with a
-  `tokens` object wins. `used = tokens.input + (tokens.cache.read ?? 0)`.
-  Non-finite or negative `used` is unknown. Missing usage, missing limit, or
-  a non-positive limit is unknown.
-- The limit comes from the model entry whose `providerID` matches the
-  resolved ref and whose `modelID` or `id` equals the ref id.
-- Unknown usage renders `filled = 0` and muted boxes; there is no colour band
-  for unknown.
-- Role row `pct` = the maximum `pct` among its instances with known usage
-  (the busiest). Its `filled` = the maximum fill. A role with no known usage
-  has `pct === undefined`.
-- Fill colour is derived from `pct` alone, never from the row text colour.
-- A resolved model with no `limit.context` in the catalog leaves `pct`
-  unknown: empty muted boxes, the same rendering as unknown usage. There is no
-  invented fallback limit (F17, §2).
+- **Which messages count.** Only entries of the instance's own session
+  `message.list(sessionID)` with `type === "assistant"`, a `tokens` object
+  whose `output` is a finite number `>= 0`, and a measurable stream window:
+  `time.created`, `time.streamed` and `time.completed` finite numbers,
+  `time.completed > time.streamed`, `time.streamed >= time.created`.
+  Ancestor and descendant sessions never contribute.
+- **The formula.** For one counted message
+  `ms = time.completed - time.streamed` and `tokens = tokens.output`; the
+  instance's `tps = 1000 × Σ tokens / Σ ms`. `tokens.output` excludes
+  `tokens.reasoning`, `tokens.input` and both cache counters.
+- **Unknown.** `tps` is unknown when no message counts, when `Σ ms <= 0`, or
+  when either sum is not finite. Unknown renders `filled = 0` with five muted
+  boxes, never a guessed number. A message with a missing token count, a
+  missing `time.streamed`/`time.completed`, or `completed <= streamed`
+  contributes neither tokens nor time; it is skipped whole, so a session whose
+  messages all lack timing stays unknown rather than reporting a zero.
+- **No `now` input.** Speed depends only on message timestamps, never on the
+  render clock: a not-yet-completed assistant message does not count (its
+  `tokens.output` is not final, F22). The ticker is a recompute trigger, not a
+  time input; with unchanged message data a tick yields the same fill.
+- **Window.** Cumulative over every counted message since the session started
+  (no reset, no rolling window): the pure layer keeps no per-instance state,
+  and the cumulative streaming rate is stable to read.
+- **Rounding.** Half-up (`floor(x + 0.5)`), matching JavaScript
+  `Math.round` on non-negative values: `19 → 1`, `10 → 1`, `30 → 2`,
+  `50 → 3`, `90 → 5` (C19). `10` therefore **fills** one box, not zero (F20).
+- **Role row.** Role `tps` = the maximum `tps` among its **active** instances
+  with known speed; its `filled` is computed from that value by the same
+  formula. A role with no known speed, an idle role, and a grace-only role
+  all render `tps === undefined`, `filled = 0`.
+- **Colour.** `barTone(filled)` returns `"success"` for `filled > 0` and
+  `"muted"` for `filled === 0`; the TUI maps those to
+  `theme.text.feedback.success.base` and `theme.text.muted`. There is no
+  warning or error bar colour anywhere (C21).
+- A grace instance keeps its row text in warning colour (R4) but its boxes
+  are empty muted, like a grace role row (F18).
 
 ## R7 — Team ordering and overflow
 
@@ -359,10 +392,10 @@ Design:
   reporting either a clean state or findings.
 
 The testable surface is the pure layer: `panel`, `clip`, `fitModel`,
-`barFill` (returns 0–`BAR_CELLS`), `barBand` (returns `"muted" | "success" |
-"warning" | "error"`), `contextPct`, `resolve`/`modelRef`, `labeler`,
-`elapsed`, `filterRows`. Theme mapping must be expressed through a pure
-state/band result so the colour rules of R2/R4/R6 are testable without the
+`speedTps` (returns tokens per second or `undefined`), `barFill` (returns
+0–`BAR_CELLS`), `barTone` (returns `"success" | "muted"`), `resolve`/`modelRef`,
+`labeler`, `elapsed`, `filterRows`. Theme mapping must be expressed through a
+pure state/tone result so the colour rules of R2/R4/R6 are testable without the
 SDK.
 
 ---
@@ -379,15 +412,17 @@ All positions are 1-based columns. `W` is the effective width; `W >= 19`
 | 1–3 | 3 | number: two digits + `.` (` 1.`, `10.`) | `ROLE_NUMBER_CELLS` |
 | 4–12 | 9 | agent name, clipped with `…`, padded | `ROLE_NAME_CELLS` |
 | 13 | 1 | space between name and model | `ROLE_NAME_GAP_CELLS` |
-| 14–(W−6) | W−19 | model column: label clipped to `min(W−19, 20)` cells, padded to the column | `ROLE_FIXED_CELLS`, `ROLE_MODEL_MAX_CELLS` |
-| W−5 | 1 | gap before the bar | `ROLE_BAR_GAP_CELLS` |
-| W−4–W | 5 | context boxes | `BAR_CELLS` |
+| 14–(W−5) | W−18 | model column: label clipped to `min(W−18, 20)` cells, padded to the column | `ROLE_FIXED_CELLS`, `ROLE_MODEL_MAX_CELLS` |
+| W−4–W | 5 | speed boxes (tight after the model column) | `BAR_CELLS` |
 
-Head length = `3 + 9 + 1 + (W−19) + 1 = W − 5`; plus 5 boxes = `W`.
+Head length = `3 + 9 + 1 + (W−18) = W − 5`; plus 5 boxes = `W`.
 
-At `W = 35`: number 3, name 9, space 1, model column 16, gap 1, boxes 5.
-Example: ` 1.explore   Go/Kimi K3.1 Pro ▮▮▮▯▯`.
-A role with no `agent.model`: the model column is 16 spaces.
+At `W = 35`: number 3, name 9, space 1, model column 17 (cap 20 not reached),
+boxes 5. `3 + 9 + 1 + 17 + 5 = 35`.
+Example: ` 1.explore   Go/Kimi K3.1 Pro ` + 5 boxes: the 16-cell label plus
+1 pad cell fills the 17-cell column, so no cell exists between the label and
+the boxes.
+A role with no `agent.model`: the model column is 17 spaces.
 
 ### 1.2 Instance row
 
@@ -396,15 +431,15 @@ A role with no `agent.model`: the model column is 16 spaces.
 | 1–3 | 3 | indent: space, glyph (`├` or `└`), space | `INSTANCE_INDENT_CELLS` |
 | 4–11 | 8 | session title, clipped with `…`, padded | `INSTANCE_TITLE_CELLS` |
 | 12 | 1 | space between title and model | `INSTANCE_TITLE_GAP_CELLS` |
-| 13–(W−6) | W−18 | model column: label clipped to `min(W−18, 12)`, padded to the column | `INSTANCE_FIXED_CELLS`, `INSTANCE_MODEL_CELLS` |
-| W−5 | 1 | gap before the bar | `INSTANCE_BAR_GAP_CELLS` |
-| W−4–W | 5 | context boxes | `BAR_CELLS` |
+| 13–(W−5) | W−17 | model column: label clipped to `min(W−17, 13)`, padded to the column | `INSTANCE_FIXED_CELLS`, `INSTANCE_MODEL_CELLS` |
+| W−4–W | 5 | speed boxes (tight after the model column) | `BAR_CELLS` |
 
-Head length = `3 + 8 + 1 + (W−18) + 1 = W − 5`; plus 5 boxes = `W`.
+Head length = `3 + 8 + 1 + (W−17) = W − 5`; plus 5 boxes = `W`.
 
-At `W = 35`: indent 3, title 8, space 1, model column 17 (12 label cells +
-5 padding), gap 1, boxes 5. The title field is always 8 cells even when the
-row is narrow.
+At `W = 35`: indent 3, title 8, space 1, model column 18 (13 text cells + 5
+padding), boxes 5. `3 + 8 + 1 + 18 + 5 = 35`. The title field is always 8
+cells even when the row is narrow; the model text shrinks below 13 only when
+the column itself is narrower than 13 (`W < 30`).
 
 ### 1.3 Model label split rule
 
@@ -424,16 +459,17 @@ Input: a full or short label `P/M…` and a budget `B` cells.
 `n == 1`; otherwise the widest prefix with `prefix + 1 <= n` cells plus `…`.
 Padding to a column is always spaces.
 
-The role label budget is `min(W−19, 20)`; the instance label budget is
-`min(W−18, 12)`. The picker label uses a plain `clip(label,
+The role label budget is `min(W−18, 20)`; the instance label budget is
+`min(W−17, 13)`. The picker label uses a plain `clip(label,
 PICKER_MODEL_CELLS)` — the split rule is not applied there (R9) — and the
 picker agent uses `clip(agent, PICKER_AGENT_CELLS)` with the same `clip` rule
-(§1.3, C28, F16).
+(§1.3, C24, C28, F16).
 
 ## 2. Data flow
 
-One recompute per watched event and per grace tick. The plugin stores no
-session state; every field is derived from a host source at render time.
+One recompute per watched event (including a message content update) and per
+grace tick. The plugin stores no session state; every field is derived from a
+host source at render time.
 
 | Source | Provides | Feeds |
 | --- | --- | --- |
@@ -442,57 +478,62 @@ session state; every field is derived from a host source at render time.
 | `context.data.session.get(id)` | one session by id | ancestor walk for R8; session open |
 | `context.data.session.root(id)` | root session id | tab scope (R3) |
 | `context.data.session.status(id)` | `running` / `idle` | active vs not |
-| `context.data.session.message.list(id)` | messages with optional `tokens` | `pct` numerator (newest reporting message) |
+| `context.data.session.message.list(id)` | assistant messages with optional `tokens` (`output`, `input`, `reasoning`, `cache`) and `time.created` / `time.streamed?` / `time.completed?` | `tps` numerator and denominator (chain below) |
 | `context.data.session.sync(id)`, `context.data.session.message.sync(id)` | loads one session / its messages into the TUI data cache | populates `session.list`/`session.get` and `message.list` before they are read (G16) |
-| `context.data.location.model.list(location)` | model id, modelID, providerID, name, `limit.context` | `pct` denominator, model display names |
+| `context.data.location.model.list(location)` | model id, modelID, providerID, name | model display names only; `limit.context` is no longer read |
 | `context.data.location.provider.list(location)` | provider id, name | provider display names / short label last word |
-| `context.theme` | `text.base`, `text.muted`, `text.feedback.success/warning/error.base` | title, idle/active/grace text, bar bands, empty boxes |
+| `context.theme` | `text.base`, `text.muted`, `text.feedback.success/warning.base` | title, idle/active/grace text, filled boxes (success), empty boxes (muted) |
 | `context.storage.store("opencode-subagent-model")` | persisted `{ compact }` | R10 |
 | slot input `sessionID` | viewed session id | R3 tab scope; compact count scope |
 | `context.ui.router.current()` | current route | session context for opening a picked session; not used to scope the picker (F9) |
-| host events (`session.created/deleted/moved/forked/renamed/status/idle/agent.selected/model.selected/execution.started/succeeded/failed/interrupted`) | invalidation; on `session.created` and `session.execution.started` also a sync trigger (G16) | bump the view signal; load the instance session then its messages |
-| 1 s ticker | clock while a grace row exists | recompute `now` for grace expiry |
+| host events (`session.created/deleted/moved/forked/renamed/status/idle/agent.selected/model.selected/execution.started/succeeded/failed/interrupted`, plus `session.message.content.updated`) | invalidation; on `session.created` and `session.execution.started` also a sync trigger, on `session.message.content.updated` a message re-sync trigger (G16) | bump the view signal; load the instance session then its messages; re-read messages after a new one arrives |
+| 1 s ticker | clock while a grace row exists; doubles as a recompute trigger for `tps` (R6) | recompute `now` for grace expiry and re-run `panel()` |
 
 Location: the location the TUI is showing (`context.location`, else
 `context.data.location.default()`). The plugin never merges agent definitions
 from disk; the host's agent list is authoritative.
 
-`pct` chain: resolve the session's model ref (R8) → find `limit.context` by
-provider + model id → find the newest message with `tokens` → `used = input +
-cache.read` → `pct = used / limit × 100`. Either side missing → unknown.
+`tps` chain: `message.list(sessionID)` of the instance's own session → keep
+assistant messages that pass the §R6 filter → `tokens = Σ tokens.output`,
+`ms = Σ (time.completed − time.streamed)` → `tps = 1000 × tokens / ms`.
+Nothing else feeds the bar: no model limit, no context window, no token
+percentage. `model.list` is read for labels only.
 
 Data availability: `message.list(id)` reads the data layer's cache, which the
-client fills only for sessions it has synchronised. The current code never
-calls `session.sync()` or `session.message.sync()`, so an instance session
-usually has no loaded messages and `pct` stays unknown (G16). The plugin
-therefore syncs before it reads, on the touchpoints it already collects:
+client fills only for sessions it has synchronised. The code now syncs before
+it reads (`syncSession`, `src/tui.tsx:92-108`) on the touchpoints it already
+collects:
 
 - `session.execution.started` or `session.created` for a child session with a
   visible role → `context.data.session.sync(sessionID)` first, then
   `context.data.session.message.sync(sessionID)` once the session is loaded.
+- `session.message.content.updated` for an instance session → re-sync its
+  messages so a newly arrived message reaches the cache before the next
+  `panel()` pass. The once-per-session `syncedSessions` guard blocks that
+  re-sync today (G16).
 - The sync is a host call with a side effect and lives in `src/tui.tsx`, not
   in the pure layer (R12); no cache entry is invalidated by hand.
 - Sync failure is not a panel failure: it follows R11 (toast, last good view),
   and the affected row simply shows what is loaded.
 
-No-limit rule (F17): when the resolved model has no `limit.context` in the
-catalog, `pct` stays unknown and the bar renders exactly like unknown usage —
-empty muted boxes (R6). The plugin never invents a fallback limit (no provider
-default, no nominal window, no `0`). The pure-layer `pct` semantics are
-unchanged: `contextPct` still returns `undefined` when either side is missing.
+Obsolete rule: F17's no-limit fallback rule is dead with A.3. No percentage
+exists, so no `limit.context` is read, no fallback limit exists, and a model
+missing from the catalog cannot blank the bar. The bar is unknown only when
+the messages cannot yield a speed (§R6).
 
 ## 3. State rules and colours
 
 | State | Predicate | Role text | Role boxes | Instance text | Instance boxes |
 | --- | --- | --- | --- | --- | --- |
 | idle | visible role with no active and no grace instance | `theme.text.muted` | empty (0 filled) | n/a | n/a |
-| active | `status === "running"`, visible role, in scope | agent `color` (parsed), else `theme.text.feedback.success.base` | busiest instance's fill and band | agent `color`, else success | own fill and band |
-| grace | not running, `outcome` failed/interrupted, `0 <= now − ended < GRACE_MS` | `theme.text.feedback.warning.base` | empty (0 filled; F12) | warning, overrides agent colour | own fill and band |
+| active | `status === "running"`, visible role, in scope | agent `color` (parsed), else `theme.text.feedback.success.base` | busiest active instance's fill, fill cells success green | agent `color`, else success | own fill, fill cells success green |
+| grace | not running, `outcome` failed/interrupted, `0 <= now − ended < GRACE_MS` | `theme.text.feedback.warning.base` | empty (0 filled; F12) | warning, overrides agent colour | empty (0 filled; F18) |
 
 - Empty boxes (the `5 − filled` remainder) are always `theme.text.muted`,
   independent of the row text (F13).
-- Bar bands, from `pct` alone: `undefined` → muted; `< 50` → success;
-  `< 70` → warning; `>= 70` → error.
+- Filled boxes are always `theme.text.feedback.success.base`; `barTone` has
+  exactly two outcomes, `"success"` (filled > 0) and `"muted"` (filled = 0).
+  There is no warning or error box colour (R6).
 - Role state: active if any instance active; else grace if any instance;
   else idle.
 - A finished succeeded session, an out-of-window failure, a running session
@@ -526,15 +567,16 @@ unchanged: `contextPct` still returns `undefined` when either side is missing.
 ## 5. Model resolution order
 
 Already specified in R8. The single shared implementation must be used by the
-instance rows, the picker, and the context percentage; the role row uses
+instance rows, the picker, and the speed computation's message scope: each
+instance's speed reads only that session's own messages. The role row uses
 only the agent definition model (R2). Cycle protection is mandatory: a
 parent chain that revisits a session stops the walk and falls through to
 item 4.
 
 ## 6. Contract numbers
 
-`cellWidth` follows §0. All fixtures are ASCII except C5/C12 wide-cell
-cases. Values are exact, not shapes; a fixture that asserts only width or
+`cellWidth` follows §0. All fixtures are ASCII except the wide-cell cases in
+C5 and C11. Values are exact, not shapes; a fixture that asserts only width or
 "contains" does not satisfy R12.
 
 | # | Constant | Value | Field | Fits fixture | Does-not-fit fixture | Req |
@@ -544,35 +586,44 @@ cases. Values are exact, not shapes; a fixture that asserts only width or
 | C3 | `ROLE_NUMBER_DIGITS` | 2 | role number digits | role 9 → `" 9."`, role 10 → `"10."` | no emitted role index reaches 100 (body cap); the fixture asserts the highest emitted number is the tenth role | R2 |
 | C4 | `ROLE_NUMBER_CELLS` | 3 | number field (2 digits + `.`) | first role: `head.slice(0,3) === " 1."` | tenth role: `head.slice(0,3) === "10."` (no leading space, still 3 cells) | R2, R5 |
 | C5 | `ROLE_NAME_CELLS` | 9 | agent name field | `"explore"` → `"explore  "`; 9-cell `"123456789"` unchanged | `"1234567890"` → `"12345678…"`; wide `"调研团队组"` (10 cells) → `"调研团队…"` (9 cells) | R2, R5 |
-| C6 | `ROLE_NAME_GAP_CELLS` | 1 | space after the name field | at width 35, 0-based `head[12] === " "` | a 10-cell name is clipped to 9, so no name cell lands in the gap column | R5 |
-| C7 | `ROLE_MODEL_MAX_CELLS` | 20 | role model label text cap | width 39, 20-cell label kept | width 39, 21-cell label → 19 cells + `…` | R5 |
-| C8 | `ROLE_FIXED_CELLS` | 19 | all row cells except the model column (3+9+1+1+5) | width 19 → model column 0, head 14 | width 18 → effective width raised to 19 (F1) | R5 |
-| C9 | `ROLE_BAR_GAP_CELLS` | 1 | gap before role boxes | 0-based `head[width-6] === " "` (1-based column `W−5`) | boxes starting at `head.length` instead of `head.length+1` | R5 |
-| C10 | `BAR_CELLS` | 5 | boxes | `filled = 5` → 5 filled glyphs | `filled = 0` → 5 empty glyphs | R1, R3, R5, R6 |
-| C11 | `INSTANCE_INDENT_CELLS` | 3 | indent (space, glyph, space) | head starts `" ├ "` | non-last instance starts `" ├ "`, last `" └ "` | R3, R5 |
-| C12 | `INSTANCE_TITLE_CELLS` | 8 | instance title field | `"Inspect modules"` → `"Inspect…"`; 8-cell title unchanged | 9-cell `"abcdefghi"` → `"abcdefg…"`; wide `"调研团队组"` (10 cells) → `"调研团…"` (7 cells: 6 + `…`) | R3, R5 |
-| C13 | `INSTANCE_TITLE_GAP_CELLS` | 1 | space after the title field | 0-based `head[11] === " "` at width 35 | a 9-cell title is clipped to 8, so no title cell lands in the gap column | R5 |
-| C14 | `INSTANCE_MODEL_CELLS` | 12 | instance model label text cap | width 35: `"Go/Grok 4.7"` (11 cells) + 1 pad in the 12-cell text field | budget 12: `"OpenCode/Kimi K3.1 Pro"` (22 cells) → split `"Open…/Kimi …"` (12 cells); plain `clip` of the whole label gives `"OpenCode/Ki…"` (12 cells), so the fixture discriminates the split rule | R3, R5 |
-| C15 | `INSTANCE_BAR_GAP_CELLS` | 1 | gap before instance boxes | 0-based `head[width-6] === " "` (1-based column `W−5`) | boxes begin at `head.length` | R5 |
-| C16 | `INSTANCE_FIXED_CELLS` | 18 | all row cells except the model column (3+8+1+1+5) | width 35 → model column 17 = 12 label cells + 5 padding | width 18 → effective width raised to 19, model column 1 (F1) | R5 |
-| C17 | `PERCENT` | 100 | percentage scale | `pct = 100` → `filled = 5` | `pct = 0` → `filled = 0` | R6 |
-| C18 | `BAR_MIN_FILL` | 0 | lower fill clamp | `pct = 0` → `filled = 0` | `pct = -1` → `filled = 0` (clamped, no negative repeat) | R6 |
-| C19 | `WARNING_MIN_PCT` | 50 | warning band start | `pct = 50` → warning | `pct = 49.9` → success | R6 |
-| C20 | `ERROR_MIN_PCT` | 70 | error band start | `pct = 70` → error | `pct = 69.9` → warning | R6 |
-| C21 | `GRACE_MS` | 30 000 | grace window | `now − ended = 29 999` → grace row | `now − ended = 30 000` → folded | R4 |
-| C22 | `GRACE_TICK_MS` | 1 000 | ticker period | one tick moves `now` from 29 000 to 30 000, so the grace row folds | no grace row → no interval scheduled | R4 |
-| C23 | `PICKER_MODEL_CELLS` | 96 | picker model clip | 96-cell full label kept | 97 cells → 95 cells + `…` | R9 |
-| C24 | `ELLIPSIS_CELLS` | 1 | clip reservation | `clip("abcdef", 4) = "abc…"` | `clip("abc", 1) = "…"` | R5 |
-| C25 | `PROVIDER_MAX_SHARE` | 1/2 of the field | provider share in the split rule | budget 16: `"Go/MiniMax M3.1 Flash"` → `"Go/MiniMax M3.1…"` | budget 16: `"SomeVeryBigName/Model"` → `"SomeVe…/Model"` (provider 7 cells + `/`) | R5 |
-| C26 | fill formula | `round(pct × 5 / 100)`, half up | boxes filled | `pct 10 → 1`, `50 → 3`, `70 → 4`, `90 → 5` | `pct 9.99 → 0`, `120 → 5` (clamp), `−1 → 0` | R6 |
-| C27 | `UNKNOWN_MODEL` | text `unknown model` | last resolution fallback | session with no ref → `"unknown model"` | a cell budget ≥ 13 keeps it; 12 clips to `"unknown mod…"` | R8 |
+| C6 | `ROLE_NAME_GAP_CELLS` | 1 | space after the name field | at width 35, `"explore"` + model `Go/Kimi K3.1 Pro` → head `" 1.explore   Go/Kimi K3.1 Pro "` (30 cells, 0-based `head[12] === " "`) | a gap-less implementation starts the model one cell early: its head is `" 1.explore  Go/Kimi K3.1 Pro  "` (30 cells, `head[12] === "G"`, model column 18), so the pinned string fails it | R5 |
+| C7 | `ROLE_MODEL_MAX_CELLS` | 20 | role model label text cap | width 39 (column 21): `"Go/Kimi K3.1 Pro Max"` (20 cells) kept whole | width 39: `"Go/Kimi K3.1 Pro Maxx"` (21 cells) → `"Go/Kimi K3.1 Pro Ma…"` (20 cells) | R5 |
+| C8 | `ROLE_FIXED_CELLS` | 18 | all row cells except the model column (3+9+1+5) | width 19 → model column 1, head 14 | width 18 → effective width raised to 19 (F1) | R5 |
+| C9 | `BAR_CELLS` | 5 | boxes | `filled = 5` → 5 filled glyphs | `filled = 0` → 5 empty glyphs | R1, R3, R5, R6 |
+| C10 | `INSTANCE_INDENT_CELLS` | 3 | indent (space, glyph, space) | first of two instances at width 35, title `Inspect modules`, model `Go/Grok 4.7`: head `" ├ Inspect… Go/Grok 4.7       "` (30 cells) | both directions fail: a not-last instance rendering `" └ Inspect… Go/Grok 4.7       "` (index 1 is `└`), and the last instance rendering `" ├ …"` instead of `" └ …"`; a 2-cell indent shifts the title left (`" ├I…"`) and fails `head.slice(0, 3) === " ├ "`. The fixture pins `├` on every instance except the last and `└` on the last | R3, R5 |
+| C11 | `INSTANCE_TITLE_CELLS` | 8 | instance title field | `"Inspect modules"` → `"Inspect…"`; 8-cell title unchanged | 9-cell `"abcdefghi"` → `"abcdefg…"`; wide `"调研团队组"` (10 cells) → `"调研团…"` (7 cells: 6 + `…`) | R3, R5 |
+| C12 | `INSTANCE_TITLE_GAP_CELLS` | 1 | space after the title field | 0-based `head[11] === " "` at width 35 | a 9-cell title is clipped to 8, so no title cell lands in the gap column | R5 |
+| C13 | `INSTANCE_MODEL_CELLS` | 13 | instance model label text cap | width 35: `"Go/Grok 4.7.1"` (13 cells) kept whole, so the column is 13 text + 5 padding | budget 13: `"OpenCode/Kimi K3.1 Pro"` (22 cells) → split `"Open…/Kimi K…"` (13 cells); plain `clip` gives `"OpenCode/Kim…"` (13 cells), so the fixture discriminates the split rule | R3, R5 |
+| C14 | `INSTANCE_FIXED_CELLS` | 17 | all row cells except the model column (3+8+1+5) | width 35 → model column 18 = 13 text + 5 padding | width 18 → effective width raised to 19, model column 2 (F1) | R5 |
+| C15 | tight boxes (no gap cell) | n/a | the model column ends where the boxes start | width 35 role: `"Go/Grok 4.7 Flash"` (17 cells) renders whole, because the column is `width − 18 = 17` | a gap-cell implementation has a 16-cell role column and returns `"Go/Grok 4.7 Fla…"` (16 cells); instance twin at 13 vs 12: `"Go/Grok 4.7.1"` whole vs `"Go/Grok 4.7…"` | R5 |
+| C16 | `FILL_MIN_BOXES` | 0 | lower fill clamp | `tps = 0` → `filled = 0` | `tps = 9` → `filled = 0` (below half a box) | R6 |
+| C17 | `FILL_MAX_BOXES` | 5 | upper fill clamp | `tps = 1000` → `filled = 5` (clamped, not 50) | `tps = 89` → `filled = 4` (clamp not reached) | R6 |
+| C18 | `TPS_PER_BOX` | 20 | tokens/sec per filled box | `tps = 20` → `filled = 1` (exactly one box); `tps = 19` → `filled = 1` | `tps = 29` → `filled = 1` (needs 30 for two boxes) | R6 |
+| C19 | fill formula | `floor(tps / TPS_PER_BOX + 0.5)` then clamp `FILL_MIN_BOXES`–`FILL_MAX_BOXES` | boxes filled | `tps 10 → 1`, `30 → 2`, `50 → 3`, `90 → 5` (half-up, so .5 rounds up) | `tps 9 → 0`, `29 → 1`, `89 → 4` | R6 |
+| C20 | tps formula | `1000 × Σ tokens.output / Σ (time.completed − time.streamed)` over counted assistant messages | tokens per second | one assistant message, `output 200`, `streamed 1000`, `completed 2000` → `tps = 200`; two messages `100` over 1000 ms and `100` over 3000 ms → `50` (the average of the two per-message rates would give `66.67`) | same message without `time.completed`, or without `tokens`, or with `completed === streamed` → `undefined` → 0 boxes | R6 |
+| C21 | `barTone` | `filled > 0` → `"success"`, else `"muted"` | box colour class | `tps 10` → 1 box → `"success"`; `tps 300` → 5 boxes → `"success"` | `tps 1000` (5 boxes) → never `"error"`; unknown speed → `"muted"`; no `filled` value returns `"warning"` or `"error"` | R6 |
+| C22 | `GRACE_MS` | 30 000 | grace window | `now − ended = 29 999` → grace row | `now − ended = 30 000` → folded | R4 |
+| C23 | `GRACE_TICK_MS` | 1 000 | ticker period | one tick moves `now` from 29 000 to 30 000, so the grace row folds | no grace row → no interval scheduled | R4 |
+| C24 | `PICKER_MODEL_CELLS` | 96 | picker model clip | 96-cell full label kept | 97 cells → 95 cells + `…` | R9 |
+| C25 | `ELLIPSIS_CELLS` | 1 | clip reservation | `clip("abcdef", 4) = "abc…"` | `clip("abc", 1) = "…"` | R5 |
+| C26 | `PROVIDER_MAX_SHARE` | 1/2 of the field | provider share in the split rule | budget 16: `"Go/MiniMax M3.1 Flash"` → `"Go/MiniMax M3.1…"` | budget 16: `"SomeVeryBigName/Model"` → `"SomeVe…/Model"` (provider 7 cells + `/`) | R5 |
+| C27 | `UNKNOWN_MODEL` | text `unknown model` | last resolution fallback | column 13 (width 30) keeps the 13-cell text whole | column 12 (width 29) → `"unknown mod…"` (12 cells) | R8 |
 | C28 | `PICKER_AGENT_CELLS` | 24 | picker agent field | `"explore-deep-review-qa"` (22 cells) and `"explore-deep-review-qa12"` (24 cells) kept whole | `"explore-deep-review-qa123"` (25 cells) → `"explore-deep-review-qa1…"` (23 agent cells + `…`, 24 cells) | R9 |
 | C29 | picker title budgets (independence rule) | agent ≤ `PICKER_AGENT_CELLS`, model ≤ `PICKER_MODEL_CELLS`; neither consumes the other | picker title `agent · model` | agent `"explore-deep-review-qa12"` (24 cells) with model `"m"` × 96 (96 cells) → all 24 agent cells and all 96 model cells render unclipped | agent `"explore-deep-review-qa123"` (25 cells) with the same 96-cell model → agent renders `"explore-deep-review-qa1…"` (24 cells) and the model still renders 96 cells, not 95 (an implementation subtracting the agent overflow from `PICKER_MODEL_CELLS` yields 95 and fails) | R9 |
 
-Fixtures for C1 that pin the section-stop rule (R7, §4, F5). Width 35;
-sections built from roles and instances as stated.
+One constant, one meaning, checked at the two places the numbers collide:
 
-- Stop rule (discriminating): role `A` with 7 instances (8 body lines), then
+- `BAR_CELLS` (glyphs rendered) and `FILL_MAX_BOXES` (upper fill clamp) are
+  both 5 by construction, but they are different fields. The invariant
+  `0 <= filled <= BAR_CELLS` is asserted, and `filled` is produced only by the
+  C19 formula.
+- `ROLE_MODEL_MAX_CELLS` (20) caps the role **text**; the role **column** is
+  `ROLE_FIXED_CELLS`'s complement (`width − 18`). Neither is used for the
+  instance column, which has `INSTANCE_MODEL_CELLS` (13) and
+  `INSTANCE_FIXED_CELLS` (17).
+
+Fixtures for C1 that pin the section-stop rule (R7, §4, F5). Width 35;
+sections built from roles and instances as stated.- Stop rule (discriminating): role `A` with 7 instances (8 body lines), then
   role `B` with 2 instances (3 lines, 8 + 3 > 10), then idle role `C`
   (1 line). Body = `A`'s 8 lines only, `more = 4`, no row for `B` or `C`.
   An implementation that skips the non-fitting section would emit `C`
@@ -585,23 +636,33 @@ sections built from roles and instances as stated.
 - Five-instance role boundary: role with 5 instances (6 lines) plus 10 idle
   roles → body = 6 + 4 idle = 10 lines, `more = 6`.
 
-C14 split-rule recomputation, both strings derived from §1.3 and pinned:
+C13 split-rule recomputation, both strings derived from §1.3 and pinned:
 
-- Input `label = "OpenCode/Kimi K3.1 Pro"`, budget `B = 12`.
-  `cellWidth(label) = 8 + 1 + 13 = 22 > 12`, and the label contains `/`.
-- `S = floor(12 / 2) = 6`; provider text `clip("OpenCode", 5)` = widest prefix
+- Input `label = "OpenCode/Kimi K3.1 Pro"`, budget `B = 13`.
+  `cellWidth(label) = 8 + 1 + 13 = 22 > 13`, and the label contains `/`.
+- `S = floor(13 / 2) = 6`; provider text `clip("OpenCode", 5)` = widest prefix
   with `prefix + 1 <= 5` → `"Open"` (4 cells) → `"Open…"` (5 cells).
-- Model budget `= 12 − 5 − 1 = 6`; `clip("Kimi K3.1 Pro", 6)` → widest prefix
-  with `prefix + 1 <= 6` → `"Kimi "` (5 cells) → `"Kimi …"` (6 cells).
-- Split result: `"Open…/Kimi …"`, `5 + 1 + 6 = 12` cells. **This is the pinned
-  fixture.**
-- Plain clipping of the same label: `clip(label, 12)` → widest prefix with
-  `prefix + 1 <= 12` → `"OpenCode/Ki"` (11 cells) → `"OpenCode/Ki…"`
-  (12 cells). The two strings differ, so the fixture fails an implementation
+- Model budget `= 13 − 5 − 1 = 7`; `clip("Kimi K3.1 Pro", 7)` → widest prefix
+  with `prefix + 1 <= 7` → `"Kimi K"` (6 cells) → `"Kimi K…"` (7 cells).
+- Split result: `"Open…/Kimi K…"`, `5 + 1 + 7 = 13` cells. **This is the
+  pinned fixture.** (At the old 12-cell budget the same input gave
+  `"Open…/Kimi …"`; the whole string moves by one cell.)
+- Plain clipping of the same label: `clip(label, 13)` → widest prefix with
+  `prefix + 1 <= 13` → `"OpenCode/Kim"` (12 cells) → `"OpenCode/Kim…"`
+  (13 cells). The two strings differ, so the fixture fails an implementation
   that skips the split rule.
-- Non-discriminating input, kept only as a plain-clip coincidence note:
-  `"Go/MiniMax M3.1 Flash"` at budget 12 also yields `"Go/MiniMax …"` under
-  both rules; it must not be used as the C14 fixture.
+- **Coincidence at budget 13 — non-discriminating, must not be used as a
+  fixture.** The retired example `"Go/MiniMax M3.1 Flash"` (21 cells) yields
+  `"Go/MiniMax M…"` under **both** rules:
+  - Split: `S = floor(13 / 2) = 6`; `clip("Go", 5)` returns `"Go"` (2 cells,
+    fits); model budget `= 13 − 2 − 1 = 10`; `clip("MiniMax M3.1 Flash",
+    10)` → `"MiniMax M…"` (9 + 1 cells); result `"Go/MiniMax M…"` (13 cells).
+  - Plain clip: `clip("Go/MiniMax M3.1 Flash", 13)` → `"Go/MiniMax M"` (12
+    cells) + `…` = `"Go/MiniMax M…"` (13 cells).
+  The two strings are identical, so this input cannot catch an implementation
+  that skips the split rule. C13's discriminator is the pinned
+  `"OpenCode/Kimi K3.1 Pro"` fixture above: `"Open…/Kimi K…"` (split) against
+  `"OpenCode/Kim…"` (plain clip).
 
 C28 recomputation, pinned:
 
@@ -635,13 +696,17 @@ Additional exact-value fixtures that carry no number:
 - Overflow line `+2 more · /subagents` exactly (U+00B7, one space each side).
 - Role row at width 35 with `agent.model = Go/Kimi K3.1 Pro`:
   `" 1.explore   Go/Kimi K3.1 Pro "` + 5 boxes (head 30 cells:
-  3 + 9 + 1 + 16 + 1; the 16-cell label fills the 16-cell model column
-  exactly, the last cell is the bar gap).
+  3 + 9 + 1 + 17; the 16-cell label plus 1 pad fills the 17-cell model column
+  exactly, and no gap cell follows).
 - Instance row at width 35, title `Inspect modules`, model `Go/Grok 4.7`:
   `" ├ Inspect… Go/Grok 4.7       "` + 5 boxes (head 30 cells:
-  3 indent + 8 title + 1 gap + 17 model column + 1 bar gap; the 11-cell label
-  leaves 6 pad cells in the column, so the run after `4.7` is 6 + 1 = 7
-  spaces).
+  3 indent + 8 title + 1 gap + 18 model column; the 11-cell label leaves
+  7 pad cells in the column, so the run after `4.7` is 7 spaces, not 6 + 1).
+- Tight-boxes discriminator at width 35: role label `"Go/Grok 4.7 Flash"`
+  (17 cells) renders whole; with a gap cell the column is 16 and the label
+  becomes `"Go/Grok 4.7 Fla…"`. Instance label `"Go/Grok 4.7.1"` (13 cells)
+  renders whole; with a gap cell the budget is 12 and it becomes
+  `"Go/Grok 4.7…"`.
 - Role ordering: instances created at 20 and 10 → the 10 role first; inside a
   role, 10 before 30 with `├` then `└`.
 - Idle ordering: `alpha`, `Zeta` → `alpha` before `Zeta`.
@@ -672,33 +737,36 @@ Coder task; findings and fixes reference these IDs.
   session list order.
 - **G7 (R4)** — Grace eligibility uses `now − ended <= GRACE_MS`, so a row
   survives at exactly 30 000 ms; the design folds at 30 000 ms.
-- **G8 (R6)** — `contextPct` clamps to 100; the design clamps only the fill.
-  A 117.1875 % session must report 117.1875 and render five boxes.
+- **G8 (R6) — obsolete at A.3.** The pct clamp fix no longer exists: with the
+  speed bar there is no percentage, no `PERCENT`, and no 100 cap. `contextPct`
+  and its 117.1875 % fixture are deleted (G17). Nothing replaces this gap.
 - **G9 (R5)** — Width arithmetic is derived from `min(20, width − 19)` with a
   floor of 4: rows are 39 cells for width > 39, wider than `width` for very
-  narrow widths, and the instance column (`budget + 1`) is one cell short at
-  width > 39. The design uses `width − 19` / `width − 18` columns with the
-  cap on text, and a floor of 19.
-- **G10 (R5)** — Constant hygiene: the role model budget
-  (`width − ROW_FIXED_CELLS`, capped at `MAX_MODEL_CELLS`) is reused without
-  a constant of its own for the instance model column
-  (`model.padEnd(budget + 1)`, `src/lib/collect.ts:449`), so one budget serves
-  two fields. `MAX_ROWS = 20` and `MAX_MODEL_CELLS = 20` are separately named
-  and are not a duplicate-meaning pair. Unnamed literals remain: `1000`
-  (`src/tui.tsx:123`), `96` (`src/tui.tsx:197`), `10`
-  (`src/tui.tsx:116`, `src/lib/collect.ts:355`), `35`
-  (`src/lib/collect.ts:295`, `:354`). The design gives every field its own
-  constant and no bare literal in those positions.
+  narrow widths, and the old instance column (`budget + 1`) is one cell short
+  at width > 39. The design uses `width − 18` (role) and `width − 17`
+  (instance) columns, no gap cell, the cap on the label **text**, and a floor
+  of 19 (C7, C8, C13, C14, C15).
+- **G10 (R5) — mostly obsolete; the width constants still move (G9).** The
+  old claims are gone from the code: the instance column has its own
+  `INSTANCE_FIXED_CELLS` / `INSTANCE_MODEL_CELLS`, the role cap has
+  `ROLE_MODEL_MAX_CELLS`, and the former bare literals (`1000`, `96`, `10`,
+  `35`) are named. What remains is A.3's layout move: `ROLE_FIXED_CELLS` 19 →
+  18, `INSTANCE_MODEL_CELLS` 12 → 13, `INSTANCE_FIXED_CELLS` 18 → 17, and
+  `ROLE_BAR_GAP_CELLS` / `INSTANCE_BAR_GAP_CELLS` deleted (`src/lib/collect.ts`
+  `:246`, `:249`, `:261`, `:264`, `:267`). `MIN_ROW_CELLS = 19` stays the
+  floor (F1). The 60 / 1000 in `elapsed` are time units, not field widths.
 - **G11 (R2, R3, R5)** — `truncate` counts UTF-16 code units, not display
   cells; wide characters and surrogate pairs misalign the boxes. The design
   measures cells (§0).
 - **G12 (R9)** — The picker clips `agent · model` together at 96; the design
   clips the model label at `PICKER_MODEL_CELLS` and the agent separately at
   `PICKER_AGENT_CELLS`, with independent budgets (C28, C29).
-- **G13 (R6)** — Working role rows never receive `pct`, so their filled boxes
-  render in the muted (unknown) colour instead of the success/warning/error
-  band of the busiest instance. `panel()` role line must carry the busiest
-  `pct`.
+- **G13 (R6)** — Working role rows never receive the busiest instance's
+  metric, so their boxes render in the muted (unknown) colour. The wiring is
+  unchanged in shape but carries a new metric: `panel()` must pass the
+  busiest **active** instance's `tps` to the role row, not a `pct`
+  (`src/lib/collect.ts:628-634`). `pct` is gone from `PanelRow` and from
+  `RunningSubagent` (`:82`).
 - **G14 (R4) — withdrawn at review.** The fallback `time.updated`, then
   `time.created`, and no grace row when neither exists, is already implemented
   (`src/lib/collect.ts:385-387`). No discrepancy; the remaining open point is
@@ -707,32 +775,54 @@ Coder task; findings and fixes reference these IDs.
   later sections, which can show a lower-priority role after a folded
   higher-priority one. The design stops the body at the first non-fitting
   section (F5).
-- **G16 (R6, §2 availability)** — Nothing syncs sessions into the TUI data
-  cache: `src/tui.tsx:28-42` watches `session.execution.started` and
-  `session.created` (and the other lifecycle events) only to bump a signal,
-  `src/tui.tsx:70-78` passes `context.data.session` through, and
-  `src/lib/collect.ts:154` then calls `sessions.message.list` on a cache that
-  usually has no messages for an instance session. Result: `pct` is unknown,
-  the bar never fills. The design syncs `context.data.session.sync(id)` then
-  `context.data.session.message.sync(id)` on those touchpoints (§2, F17 keeps
-  the no-limit rendering). Host-call side effect: verified in review by
-  inspection, not by a pure-layer fixture (R12).
+- **G16 (R6, §2 availability) — survives, re-scoped to speed.** The sync path
+  now exists (`syncSession`, `src/tui.tsx:92-108`) and loads the session, then
+  its messages, then bumps the view. Its `syncedSessions` guard makes it
+  once-per-session, so messages that arrive after the first sync never reach
+  the cache and `tps` freezes at whatever the first load contained. The design
+  keeps the same wiring and adds one trigger: on
+  `session.message.content.updated` for an instance session, re-sync its
+  messages (no session re-sync, no new timer) and bump. Host-call side effect:
+  verified in review by inspection, not by a pure-layer fixture (R12).
+- **G17 (R6)** — The speed computation does not exist. `lastUsage`
+  (`src/lib/collect.ts:157-165`) and `contextPct` (`:167-179`) read the newest
+  token report over `limit.context`; `contextLimit` (`:148-155`) finds the
+  limit; `barFill` (`:454-458`) divides a percentage; `pushInstance` (`:607`)
+  and the role aggregation (`:628-634`) pass `pct`. Required: a pure
+  `speedTps(messages)` that keeps only counted assistant messages (§R6
+  filter), returns `1000 × Σ tokens.output / Σ (completed − streamed)` or
+  `undefined`; `barFill(tps)` = `clamp(floor(tps / TPS_PER_BOX + 0.5), 0, 5)`;
+  `barTone(filled)` = `filled > 0 ? "success" : "muted"`.
+  `contextLimit`, `contextPct`, `lastUsage`, `PERCENT`, `WARNING_MIN_PCT`,
+  `ERROR_MIN_PCT`, `BAR_MIN_FILL`, `row.pct` and `RunningSubagent.pct` are
+  deleted. Recompute triggers: any watched host event (already bumps the
+  signal), `session.message.content.updated` after its re-sync (G16), and the
+  existing 1 s ticker (`src/tui.tsx:198-202`) while it runs — speed itself
+  never reads `now`, so a tick without new message data is a no-op.
+- **G18 (R6)** — Box colour is a three-band ramp: `barColor`
+  (`src/tui.tsx:120-132`) maps `barBand(pct)` to success/warning/error and
+  `:228` passes `row.pct`. Required: colour from `barTone(row.filled)` alone —
+  filled cells `theme.text.feedback.success.base`, empty cells
+  `theme.text.muted`, no warning or error path. The row **text** keeps its
+  existing state colours (idle muted, grace warning, agent colour), which is
+  a separate field.
 
 ## 8. Findings for the Project Manager
 
 Open points in `docs/Product.md` that this design resolves. None may be
 settled by the Designer alone; the Project Manager takes them to the Analyst
-(or the human) for the final wording. F3 and F14 are settled by the Product
-update; F16 and F17 are already settled (human decision A1; design decision
-recorded for traceability). Those four are listed with their source rather
-than as requests for an answer.
+(or the human) for the final wording. F3 and F14 are settled by Product
+updates; F16 is settled (human decision A1); F17 is obsolete at A.3; F18–F22
+are the new decisions A.3 forces. F16 and F17 are listed with their source
+rather than as requests for an answer.
 
 - **F1 (R5 width domain).** R5 gives no lower bound on `width`. Below 19 cells
   the role row cannot hold its fields; the design raises the effective width
-  to 19. Above 39, "model (width − 19, capped at 20)" and "both rows exactly
+  to 19. Above 38, "model (width − 18, capped at 20)" and "both rows exactly
   `width` cells" conflict if the cap is read as the column. The design reads
-  the cap as the label text and keeps the column at `width − 19`, which
-  preserves "exactly width" and "boxes last 5" for every width ≥ 19. Confirm.
+  the cap as the label **text** and keeps the role column at `width − 18`,
+  which preserves "exactly width" and "boxes last 5" for every width ≥ 19.
+  Confirm.
 - **F2 (R7 vs R4 ordering).** R7 says "roles with instances first". A
   grace-only role has instances (R4), but R4 makes grace a distinct colour
   state. The design orders grace-bearing roles with active roles by oldest
@@ -776,13 +866,13 @@ than as requests for an answer.
   viewed. The design uses an empty instance set: no instance rows, every role
   idle. It never falls back to "all tabs". Confirm.
 - **F12 (R4/R6 grace role boxes).** R6 gives role boxes only for working roles
-  (busiest instance's fill) and idle roles (empty). A role whose every
-  instance is inside the grace window is neither. The design fills 0 boxes for
-  it. Confirm.
-- **F13 (R6 remainder colour).** R6 names the fill colour per band and "empty
-  muted boxes" for unknown usage, but not the colour of the unfilled cells in a
-  partially filled bar. The design renders the `5 − filled` remainder in
-  `theme.text.muted` on every row. Confirm.
+  (busiest **active** instance's speed) and idle roles (empty). A role whose
+  every instance is inside the grace window is neither. The design fills 0
+  boxes for it. Confirm.
+- **F13 (R6 remainder colour).** R6 names one fill colour (success green) and
+  "empty muted boxes" for unknown speed, but not the colour of the unfilled
+  cells in a partially filled bar. The design renders the `5 − filled`
+  remainder in `theme.text.muted` on every row. Confirm.
 - **F14 (R9 pre-filter) — settled by the Product update.** R9 (commit
   `27485fe`) now reads: “Slash arguments pre-filter the picker (`/subagents
   explore` filters by "explore" on open).” The design sets the command
@@ -800,10 +890,47 @@ than as requests for an answer.
   24 cells by the §1.3 rule and never counts against the 96-cell model budget.
   This is a settled design decision, not an open question; Product R9 does not
   need a number for it. Recorded here for traceability.
-- **F17 (R6 no context limit) — design decision.** The pure layer
-  (`contextPct`, `src/lib/collect.ts:167`) leaves `pct` unknown when the
-  resolved model has no `limit.context` in the catalog, and the row renders
-  empty muted boxes exactly like unknown usage (R6). No fallback limit is
-  invented: not a provider default, not a nominal window, not `0`. Product R6
-  is the source of the unknown-usage rule. Syncing the session/message cache
-  (§2, G16) changes only availability, not these semantics.
+- **F17 (R6 no context limit) — obsolete at A.3.** R6 no longer uses
+  `limit.context` at all: no percentage exists, so no fallback limit can be
+  invented and no model-catalog miss can blank the bar. The bar is unknown
+  only when the instance's assistant messages cannot yield a speed (C20). The
+  old `contextPct` rule and its fixture are removed (G8, G17). No answer
+  needed; recorded so the code change is traceable.
+- **F18 (R4/R6 grace instance boxes).** R4 keeps the failed/interrupted row
+  "in warning colour", and R6 gives box colours only for live speed. A grace
+  instance is finished, so it has no live speed and R6 has no warning box
+  colour. The design renders its boxes empty muted (0 filled), the parallel of
+  F12's grace role row, and keeps only the row **text** in warning. Confirm.
+- **F19 (R6 speed arithmetic) — arbitration needed.** R6 leaves the arithmetic
+  to design and asks for a flag when the data cannot support it. The pinned
+  formula is `1000 × Σ tokens.output / Σ (time.completed − time.streamed)` over
+  the instance's counted assistant messages, using exactly these
+  `SessionMessageAssistant` fields from
+  `@opencode/client/dist/promise/generated/types.d.ts`: `type`
+  (`"assistant"`), `tokens.output` (via `TokenUsageInfo`, `types.d.ts:75-83`),
+  `time.created`, `time.streamed`, `time.completed` (`types.d.ts:3473-3499`).
+  The types exist; the risk is semantic: `time.streamed` is undocumented, and
+  the design reads it as the start of streaming. If it is a last-update
+  marker instead, the duration is understated and `tps` overstated (a
+  five-box bar at absurd speeds). Arbitration must confirm the field, or
+  accept the one-term fallback `start = time.created`, which needs no other
+  design change. No field is invented and no wall clock is substituted.
+- **F20 (R6 rounding).** `round` does not say how a half is resolved. The
+  design pins half-up (`floor(x + 0.5)`): `tps 10` fills one box, `50` fills
+  three, `90` fills five (C19). A fixture expecting `10 → 0` is inconsistent
+  with half-up; the does-not-fit boundary is `9 → 0` (C19). Confirm half-up,
+  or name floor/half-even and the boundary fixtures move with it.
+- **F21 (R5 instance model text above width 35).** R5 gives the role model a
+  width-dependent field (`width − 18`, capped 20) but the instance model a
+  fixed `13` plus "padding to align". The design reads that literally: the
+  instance text cap stays 13 at every width and the extra column cells are
+  padding (C13, C14). Confirm, or say the instance text grows with the
+  column like the role's.
+- **F22 (R4/R6 ticker and in-flight messages).** R6 says the speed is
+  "recomputed when a new message arrives or on the 1-second ticker", but R4
+  runs that ticker only while a grace row is inside its window. The design
+  keeps R4's lifetime (one ticker, one period, no always-on timer) and treats
+  a tick as a recompute trigger only: `tps` never reads `now`, so a tick
+  without new message data changes nothing. A not-yet-completed assistant
+  message does not count, because its `tokens.output` is not final. Confirm;
+  an always-on ticker would contradict R4 and is not assumed.

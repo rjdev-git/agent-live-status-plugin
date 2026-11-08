@@ -41,7 +41,7 @@ currently viewed (other tabs' sessions are invisible here).
 - Indented under the role with tree glyphs `├` (more follow) and `└` (last).
   Unnumbered.
 - Fields in order: session title (max 8 cells, clipped with `…`), model
-  short label (max 12 cells via R5's split rule), context bar (5 boxes).
+  short label (max 13 cells via R5's split rule), speed bar (5 boxes, R6).
 - Colour: same rule as the working role row.
 - A succeeded instance disappears immediately: its row collapses back into
   the role row. A failed or interrupted instance does not — it follows
@@ -68,23 +68,33 @@ last 5 columns, aligned across rows.
 - Model label rule: when `Provider/Model` overflows its field, the provider
   keeps at most half of it, and the model name gets whatever remains; the
   whole label clips to `field - 1` characters plus `…`.
-- Role field: number 3 + name 9 + space 1 + model (width - 19, capped at 20)
-  + gap 1 + boxes 5.
+- Boxes are tight: no gap cell between the box glyphs and the model field,
+  on either row shape. The freed cell belongs to the row's model field.
+- Role field: number 3 + name 9 + space 1 + model (width - 18, capped at 20)
+  + boxes 5. At the default width the model field is 17 cells.
 - Instance field: indent 3 (space, glyph, space) + title 8 + space 1 + model
-  12 + padding to align + gap 1 + boxes 5.
+  13 + padding to align + boxes 5.
 - `One constant, one meaning`: each field has its own named constant; one
   constant never serves a second field.
 
-## R6 — Context bar
+## R6 — Speed bar (context bar removed by human decision A.3)
 
-- `filled = round(pct × 5 / 100)`, clamped 0-5.
-- Fill colours: success under 50%, warning 50-69%, error 70% or more,
-  independent of the row text colour. Unknown usage: empty muted boxes.
-- `pct = (input + cache.read) of the newest message that reports tokens`
-  divided by the model's `limit.context`. Cumulative session tokens are
-  never used (they do not fall after compaction).
-- A working role row's box mirrors its busiest instance's fill; idle roles
-  show empty boxes.
+The 5 boxes show the instance's live output speed, not context usage.
+
+- `filled = clamp(round(tps / 20), 0-5)`; `20` tokens/sec fill one box.
+  (Default arbitrated with the human at A.3; one constant, one meaning.)
+- All filled boxes use the theme's success green. No warning ramp — speed
+  has no pressure semantics. Unknown speed: empty muted boxes.
+- Speed = output tokens produced divided by the wall time producing them,
+  measured over the instance's observed streaming messages, recomputed when
+  a new message arrives or on the 1-second ticker. The exact arithmetic
+  over the available message timestamps is a design decision and must be
+  flagged for arbitration if the data cannot support it.
+- A working role row's box mirrors its busiest active instance's fill; idle
+  roles show empty boxes.
+- Features removed with the context bar: the token-percentage calculation,
+  the 50/70 colour bands, and every rule that needed `limit.context`. The
+  G16 sync requirement survives untouched — messages still feed the boxes.
 
 ## R7 — Team ordering and overflow
 
