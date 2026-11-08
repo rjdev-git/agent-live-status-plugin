@@ -43,8 +43,9 @@ currently viewed (other tabs' sessions are invisible here).
 - Fields in order: session title (max 8 cells, clipped with `…`), model
   short label (max 12 cells via R5's split rule), context bar (5 boxes).
 - Colour: same rule as the working role row.
-- A finished instance disappears immediately: its row collapses back into
-  the role row, succeeded or otherwise.
+- A succeeded instance disappears immediately: its row collapses back into
+  the role row. A failed or interrupted instance does not — it follows
+  R4's grace window before the row collapses.
 
 ## R4 — Failure grace window
 
@@ -110,8 +111,10 @@ drops the variant.
 
 `/subagents` (alias `/subagent-models`) lists running subagents only:
 agent, resolved model (full label, clipped at 96), title, elapsed time,
-session ID. Type-to-filter across those fields. Enter opens the session;
-`alt+o` opens without closing the picker. Optional keybind via `bind`.
+session ID. Slash arguments pre-filter the picker (`/subagents explore`
+filters by "explore" on open). Type-to-filter across those fields. Enter
+opens the session; `alt+o` opens without closing the picker. Optional
+keybind via `bind`.
 
 ## R10 — Palette commands
 
