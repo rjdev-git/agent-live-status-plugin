@@ -23,10 +23,14 @@ testable from plain data.
   Asian Wide/Fullwidth code point is 2 cells, a combining mark is 0 cells.
   Every clip and pad in this document is measured in cells, not in UTF-16
   code units. The ellipsis `…` is 1 cell.
-- **Role** — one entry of the visible subagent set (R2): the host's agent
-  list, minus `hidden` agents, minus `mode: "primary"` agents.
-- **Instance** — one child session that belongs to a visible role and is
-  either running (**active**) or inside the failure grace window (**grace**).
+- **Role** — one entry of the panel's active **member set** (R2, A.8): in
+  charter mode the visible `.opencode/agents` definitions, in built-in mode the
+  visible host built-ins. A visible built-in with an in-scope instance under a
+  charter member set is a **temporary role**; it is a role only while it has an
+  instance (§2.1).
+- **Instance** — one child session that belongs to a role, including a
+  temporary role, and is either running (**active**) or inside the failure
+  grace window (**grace**).
 - **Body** — the role and instance lines under the title. The title and the
   overflow line are not body lines.
 - **Speed (`tps`)** — output tokens per second of one instance, computed from
@@ -39,8 +43,9 @@ testable from plain data.
     rows: Array<{ head: string; filled: number; tps?: number;
                   state: "idle" | "active" | "grace"; agentColor?: string }>
     more: number        // folded body lines
-    working: number     // roles with an active instance
-    total: number       // visible roles
+    working: number     // roles with an active instance (N), temporary roles included
+    total: number       // roles known (M): member roles only
+    mode: "charter" | "builtin"   // member-selection snapshot (A.8)
   }
   ```
 
@@ -49,17 +54,28 @@ testable from plain data.
   carries the busiest **active** instance's speed, an idle role row carries
   `undefined`, and a grace row carries `undefined` because a finished session
   has no live speed (F18).
+- `total` is `M` (R1): the member-set size, fixed by the snapshot. `working`
+  is `N`; it includes a temporarily working built-in while `total` does not, so
+  `N` can exceed `M` (`2/1`: one member and one temporary role working, one
+  member known) in charter mode (A.8).
 - The panel renders while `total > 0`; at `total = 0` the slot renders
   nothing.
 
 ## R1 — Always-visible team panel
 
 Sidebar team panel, visible whenever the host knows at least one
-subagent-capable agent (the R2 set; see F7).
+subagent-capable agent (the R2 member set; see F7).
 
 - Title: `Project Team Members N/M` in the theme's base (white) colour.
-  `N` = roles with a working instance (`view.working`); `M` = roles known
-  (`view.total`).
+  `N` = roles with a working instance (`view.working`), including a
+  temporarily working built-in; `M` = roles known (`view.total`), the
+  member-set size. In charter mode `M` is the visible `.opencode/agents`
+  definitions only and is stable for the whole session while temporary
+  built-in rows come and go (§2.1, A.8). A temporary built-in counts in `N`
+  but not in `M`, so `N` can exceed `M` (`2/1`); that is valid and intended.
+- Visibility follows `total`: a charter member set with no visible definition
+  gives `0/0`, which renders nothing, even if a temporary built-in is running
+  (F27). The panel never hides while `total > 0`.
 - Placement: `sidebar.content` by default; `sidebar.footer` and
   `prompt.footer` selectable. Any other configured value falls back to
   `sidebar.content`.
@@ -76,23 +92,40 @@ settled here.
 
 ## R2 — Role rows
 
-One row per subagent-capable agent: builtin agents plus project agent
-definitions (`context.data.location.agent.list(location)`), excluding agents
-marked `hidden` and primary agents (`mode === "primary"`; `mode` undefined
-behaves like `subagent`; `mode: "all"` is not primary and is included).
+One row per member role, plus a temporary row for a charter-mode builtin
+while it has instances (A.8). Membership is a snapshot, not a live list: the
+mode and the member roles are decided once per location on its first render
+from `context.data.location.agent.list(location)` (§2.1). Every member is
+filtered by the shared rule: not `hidden`, and `mode !== "primary"` (`mode`
+undefined behaves like `subagent`; `mode: "all"` is not primary and is
+included).
 
+- **Charter mode** — chosen when the host list holds at least one non-builtin
+  agent (C32). Member rows are the visible non-builtin definitions only.
+  Builtin agents get no idle row, even though their definitions exist in the
+  host.
+- **Built-in mode** — chosen when the host list holds no non-builtin agent.
+  Member rows are the visible builtin agents (`BUILTIN_AGENT_IDS`, C32).
+- **Charter-mode exception** — a visible builtin that is not a member gets a
+  temporary role row only while it has at least one in-scope instance (active
+  or grace, §R3); the row disappears with its last instance (§R3/R4, §2.1).
+  A non-builtin id absent from the snapshot never gets a row, running or not.
 - Row: two-digit number (` 1.`, `20.`), agent name (max 9 cells, clipped with
   `…`), the agent definition's model as the short `Provider/Model` label, an
   agent with no defined model shows blank model cells.
-- Idle state: grey (`theme.text.muted`), empty boxes.
+- Idle state: grey (`theme.text.muted`), empty boxes. Only member rows can be
+  idle; a temporary role is never idle.
 - Working state: the colour defined on the agent definition, falling back to
-  the theme's success green.
+  the theme's success green. A temporary row uses exactly this rule.
 
 Role display name is `agent.name ?? agent.id`, clipped to 9 cells and padded
 to 9. A role row's model column is blank (spaces) when
 `agent.model` is undefined; otherwise the label is the short label (R8) of
-`agent.model`, clipped by the R5 split rule. `view.total` counts the rows
-that survive the R2 filter, including rows folded by overflow.
+`agent.model`, clipped by the R5 split rule. `view.total` counts the member
+rows only, including rows folded by overflow; temporary rows never enter it.
+Member `AgentInfo` values come from the snapshot, so a mid-session definition
+change cannot move a member row; temporary rows read the live builtin
+definition (name, model, colour) and use the same clipping and fallbacks.
 
 ## R3 — Instance rows
 
@@ -106,7 +139,10 @@ currently viewed (other tabs' sessions are invisible here).
 - Colour: same rule as the working role row.
 - A succeeded instance disappears immediately: its row collapses back into
   the role row. A failed or interrupted instance does not: it follows R4's
-  grace window before its row collapses.
+  grace window before its row collapses. For a temporary builtin row (R2,
+  A.8) the collapse of the last instance removes the role row too: a
+  succeeded last instance removes both rows in the same pass, a failed or
+  interrupted last instance removes both at the R4 boundary.
 
 Rules:
 
@@ -114,9 +150,13 @@ Rules:
   (`sources.sessions.root(slotSessionID)`). A session belongs to the tab when
   its root equals that root. With no viewed session the instance set is
   empty, not "all tabs" (F11; G2).
-- A child session is attributable only when `session.agent` names a visible
-  role. Running children of hidden, primary, or unknown agents are invisible
-  (there is no role row to nest them under).
+- A child session is attributable only when `session.agent` names a member
+  role or, in charter mode, a visible builtin eligible for a temporary row
+  (R2, §2.1). Running children of hidden, primary, unknown, or non-member
+  non-builtin agents are invisible (there is no role row to nest them under).
+- A temporary builtin row exists only while it has at least one in-scope
+  instance; an out-of-scope instance cannot materialise it (otherwise the
+  row would be an idle builtin row, which R2 forbids).
 - Title = `cleanTitle(session.title ?? session.id)` (whitespace collapsed to
   single spaces, trimmed), clipped to 8 cells, padded to 8.
 - Instance model = R8 resolution for that session, rendered as the short
@@ -137,6 +177,11 @@ row.
   the window and none is working.
 - Expiry is time-based: a one-second ticker runs only while a grace row is
   inside its window, and stops afterwards.
+
+A temporary builtin row (R2, A.8) follows the same window unchanged: a
+failed or interrupted instance of it keeps warning text for exactly
+`GRACE_MS`, and at the boundary the instance row and its temporary role row
+disappear together. No extra timer, no extra state.
 
 Design decisions:
 
@@ -286,6 +331,9 @@ open:
 - Inside a role: `time.created` ascending, missing last, ties break on
   session id ascending.
 - Idle roles sort by display name, case-insensitive ascending, then id.
+- A temporary builtin role (R2, A.8) is a busy section and sorts in the
+  working group by its oldest instance start, then name/id — the same rule,
+  not a new tier. It has no idle position because it has no idle state.
 - Overflow stops at the first section that does not fit. That section and
   every later section fold; `more` counts their body lines. A later small
   section is never pulled in ahead of a folded earlier one (F5). A single
@@ -349,6 +397,12 @@ Design decisions:
 - The picker is global: all running child sessions, not scoped to the viewed
   tab (F9). It uses the same running-child predicate as R3 without the scope
   filter.
+- A.8 changes nothing here: the picker lists running subagent sessions only,
+  so a running builtin already appears, and nothing idle is listed. It keeps
+  `collect()`'s predicate and applies no member filter; the panel's member
+  set and temporary rows are a sidebar concern only. The R9 references to R3
+  stay true because R3's running-child predicate did not change, only the
+  attribution to a role.
 - Fields: title line `agent · model`; the model label clips at 96 cells
   (`PICKER_MODEL_CELLS`) and the agent clips at 24 cells
   (`PICKER_AGENT_CELLS`) by the §1.3 `clip` rule. The budgets are
@@ -418,9 +472,9 @@ Design:
 The testable surface is the pure layer: `panel`, `clip`, `fitModel`,
 `speedTps` (returns tokens per second or `undefined`), `barFill` (returns
 0–`BAR_CELLS`), `barTone` (returns `"success" | "muted"`), `resolve`/`modelRef`,
-`labeler`, `elapsed`, `filterRows`. Theme mapping must be expressed through a
-pure state/tone result so the colour rules of R2/R4/R6 are testable without the
-SDK.
+`labeler`, `elapsed`, `filterRows`, and `memberSet` (§2.1, C32). Theme
+mapping must be expressed through a pure state/tone result so the colour rules
+of R2/R4/R6 are testable without the SDK.
 
 ---
 
@@ -504,11 +558,14 @@ picker agent uses `clip(agent, PICKER_AGENT_CELLS)` with the same `clip` rule
 
 One recompute per watched event (including a message content update) and per
 grace tick. The plugin stores no session state; every field is derived from a
-host source at render time.
+host source at render time. The one exception is the member-set snapshot
+(A.8, §2.1): it is taken once per location and then read as data on every
+recompute.
 
 | Source | Provides | Feeds |
 | --- | --- | --- |
-| `context.data.location.agent.list(location)` | id, name, model, mode, hidden, color | visible role set, `M`, role names, role colours, role model column |
+| `context.data.location.agent.list(location)` | id, name, model, mode, hidden, color | member-set snapshot (mode, member roles, `M`); definitions for temporary builtin rows; agent models/colours/names; R8 step 2 |
+| member-set snapshot (TUI, A.8) | `MemberSet` from `memberSet(agent.list)` on the first render per location | `view.mode`, member idle rows, `total` (`M`), temporary-row classification (§2.1) |
 | `context.data.session.list()` | child sessions: id, parentID, agent, model, title, outcome, time | instance set, attribution to a role, title, grace eligibility |
 | `context.data.session.get(id)` | one session by id | ancestor walk for R8; session open |
 | `context.data.session.root(id)` | root session id | tab scope (R3) |
@@ -526,7 +583,75 @@ host source at render time.
 
 Location: the location the TUI is showing (`context.location`, else
 `context.data.location.default()`). The plugin never merges agent definitions
-from disk; the host's agent list is authoritative.
+from disk; the host's agent list is authoritative. The member snapshot is kept
+per location: switching back to a location reuses its frozen snapshot, and a
+location seen for the first time takes its own (§2.1, A.8).
+
+### 2.1 Member selection (A.8)
+
+The mode is a **snapshot**, not a live filter. `src/lib/collect.ts` exports
+
+```ts
+type PanelMode = "charter" | "builtin"
+type MemberSet = { mode: PanelMode; roles: AgentInfo[] }
+function memberSet(agents: AgentInfo[]): MemberSet
+```
+
+and `Sources` gains `members?: MemberSet`. `memberSet` partitions the host list
+by `BUILTIN_AGENT_IDS` (C32):
+
+- `custom = agents.filter(a => !BUILTIN_AGENT_IDS.includes(a.id))`
+- `builtin = agents.filter(a => BUILTIN_AGENT_IDS.includes(a.id))`
+- `mode = custom.length > 0 ? "charter" : "builtin"`
+- `roles = (mode === "charter" ? custom : builtin).filter(isVisibleRole)`
+
+`mode` looks at the unfiltered `custom` list, so a hidden or primary custom
+definition still selects charter mode (a definition exists) while contributing
+no row. `roles` is `M`. A builtin id is always builtin-classified, even when a
+project file overrides it (identity over origin; F26).
+
+Snapshot: `src/tui.tsx` evaluates `memberSet(list)` on the first render for a
+location and stores the result per location (keyed by its directory) for the
+life of the plugin instance. If the first read returns `undefined` (host not
+loaded), the snapshot waits for the next render that returns an array; the
+panel renders nothing until then. Once taken it is never recomputed: adding or
+removing a file in `.opencode/agents` later in the session changes neither the
+mode nor `M`, and switching back to that location reuses the frozen snapshot.
+The next plugin activation is the next snapshot (F25). `panel()` reads
+`sources.members` and never derives membership from the live `agents` list; a
+missing `members` yields `total = 0` and no rows (`mode` is then the inert
+`"builtin"` placeholder), never a fresh decision.
+
+Role sets:
+
+- **Member rows** are `members.roles` in both modes. Their `AgentInfo` values
+  are the snapshot's, so a mid-session definition change cannot remove or move
+  a member row; `total` is their count. Attribution resolves a member id to the
+  snapshot entry first; only an id with no member entry may use the live list,
+  and only when it is a charter-mode visible builtin (the temporary row).
+- **Temporary rows** exist in charter mode only. A session whose `agent` id is
+  a visible builtin (`BUILTIN_AGENT_IDS` plus `isVisibleRole`) and is not in
+  `members.roles` creates a synthetic section when it has at least one
+  in-scope instance (active or grace, §R3 scope). The section definition is
+  the live `agent.list` entry (builtins always exist), so name clipping,
+  colour fallback, the role model column, instance attribution and the R5
+  arithmetic are the existing role-row code: no new constant, no new field
+  shape. The instance rows use R8 as usual.
+- **Ignored ids**: a non-builtin id absent from `members.roles` never gets a
+  row, even while a session of it runs (its definition appeared after the
+  snapshot, or the snapshot is built-in mode). Hidden, primary and unknown ids
+  get no row in either mode.
+- A temporary section exists only while it has an instance, so only the R3/R4
+  states apply to it. A succeeded last instance leaves no row in the same
+  pass; a failed or interrupted last instance keeps the instance and role rows
+  exactly `GRACE_MS`, then both disappear together. There is no idle temporary
+  row.
+- Counters: `total = members.roles.length` (`M`), stable all session;
+  `working` counts every section with an active instance, temporary sections
+  included (`N`). `working` can therefore exceed `total` (`2/1`); that is R1's
+  contract, not an error.
+- Ordering: temporary sections use the §4 busy rule unchanged (oldest instance
+  first, then name/id). They never enter the idle list.
 
 `tps` chain: `message.list(sessionID)` of the instance's own session → keep
 assistant messages that pass the §R6 filter → `tokens = Σ tokens.output`,
@@ -539,9 +664,13 @@ client fills only for sessions it has synchronised. The code now syncs before
 it reads (`syncSession`, `src/tui.tsx:92-108`) on the touchpoints it already
 collects:
 
-- `session.execution.started` or `session.created` for a child session with a
-  visible role → `context.data.session.sync(sessionID)` first, then
+- `session.execution.started` or `session.created` for a child session whose
+  agent is visible → `context.data.session.sync(sessionID)` first, then
   `context.data.session.message.sync(sessionID)` once the session is loaded.
+  The gate stays member-independent: it admits any visible agent's child, so a
+  temporary builtin's messages land under a charter member set. Do not narrow
+  it to `members.roles`; that would freeze a temporary row's bar at unknown
+  (A.8, G16, G20).
 - `session.step.ended` for an instance session → re-sync its messages
   (`resyncMessages`, same call site) so the final `tokens.output` of each
   completed assistant step reaches the cache before the next `panel()` pass.
@@ -569,8 +698,8 @@ the messages cannot yield a speed (§R6).
 
 | State | Predicate | Role text | Role boxes | Instance text | Instance boxes |
 | --- | --- | --- | --- | --- | --- |
-| idle | visible role with no active and no grace instance | `theme.text.muted` | empty (0 filled) | n/a | n/a |
-| active | `status === "running"`, visible role, in scope | agent `color` (parsed), else `theme.text.feedback.success.base` | busiest active instance's fill, fill cells success green | agent `color`, else success | own fill, fill cells success green |
+| idle | member role with no active and no grace instance | `theme.text.muted` | empty (0 filled) | n/a | n/a |
+| active | `status === "running"`, member role or temporary builtin role, in scope | agent `color` (parsed), else `theme.text.feedback.success.base` | busiest active instance's fill, fill cells success green | agent `color`, else success | own fill, fill cells success green |
 | grace | not running, `outcome` failed/interrupted, `0 <= now − ended < GRACE_MS` | `theme.text.feedback.warning.base` | empty (0 filled; F12) | warning, overrides agent colour | empty (0 filled; F18) |
 
 - Empty boxes (the `5 − filled` remainder) are always `theme.text.muted`,
@@ -581,17 +710,19 @@ the messages cannot yield a speed (§R6).
 - Role state: active if any instance active; else grace if any instance;
   else idle.
 - A finished succeeded session, an out-of-window failure, a running session
-  of a hidden/primary/unknown agent, and any session in another tab produce
-  no row.
+  of a hidden/primary/unknown agent, a running non-member non-builtin session,
+  and any session in another tab produce no row. A temporary builtin role is
+  active or grace only; it has no idle row.
 - Title is `theme.text.base`; the overflow line is `theme.text.muted`.
 - The panel is hidden at `total = 0`; compact is shown at `total > 0` and is
   the only line then.
 
 ## 4. Orderings and overflow
 
-1. Build the visible role list and the instance sections per §2/R3/R4.
+1. Build the member role list from `sources.members` and the instance sections
+   per §2/R3/R4; a section may be a member role or a temporary builtin role.
 2. Split sections into **busy** (at least one active or grace instance) and
-   **idle** (visible roles with no instance).
+   **idle** (member roles with no instance). A temporary role is always busy.
 3. Sort busy sections by `min(created)` over their instances ascending;
    missing timestamps last; ties on role name (case-insensitive), then id.
 4. Sort each section's instances by `created` ascending; missing last; ties
@@ -606,16 +737,19 @@ the messages cannot yield a speed (§R6).
    is `1 + instances` lines; an idle section is 1 line.)
 8. `more > 0` appends `+N more · /subagents` after the body, muted.
 9. Emitted role lines are numbered `1..` in print order; instance lines stay
-   unnumbered. `working` and `total` count all roles, folded or not.
+   unnumbered. `working` counts every role with an active instance, member or
+   temporary, folded or not; `total` counts member roles only, folded or not.
 
 ## 5. Model resolution order
 
 Already specified in R8. The single shared implementation must be used by the
 instance rows, the picker, and the speed computation's message scope: each
 instance's speed reads only that session's own messages. The role row uses
-only the agent definition model (R2). Cycle protection is mandatory: a
-parent chain that revisits a session stops the walk and falls through to
-item 4.
+the definition model of its member (snapshot) or temporary builtin (live), R2.
+`sources.agents` keeps the full live list, including builtins that are not
+member rows, so R8 step 2 still resolves a temporary builtin's instance to its
+definition model. Cycle protection is mandatory: a parent chain that revisits a
+session stops the walk and falls through to item 4.
 
 ## 6. Contract numbers
 
@@ -657,6 +791,15 @@ asserts only width or "contains" does not satisfy R12.
 | C29 | picker title budgets (independence rule) | agent ≤ `PICKER_AGENT_CELLS`, model ≤ `PICKER_MODEL_CELLS`; neither consumes the other | picker title `agent · model` | agent `"explore-deep-review-qa12"` (24 cells) with model `"m"` × 96 (96 cells) → all 24 agent cells and all 96 model cells render unclipped | agent `"explore-deep-review-qa123"` (25 cells) with the same 96-cell model → agent renders `"explore-deep-review-qa1…"` (24 cells) and the model still renders 96 cells, not 95 (an implementation subtracting the agent overflow from `PICKER_MODEL_CELLS` yields 95 and fails) | R9 |
 | C30 | `BAR_GLYPH_FILLED` | `"▓"` (U+2593, 1 cell) | filled box glyph | `filled = 5` → `"▓▓▓▓▓"` (5 cells); a partially filled bar keeps the filled run leftmost | `filled = 0` → `""` (no filled glyph); the glyph is not U+25AE `▮` | R6 |
 | C31 | `BAR_GLYPH_EMPTY` | `"░"` (U+2591, 1 cell) | empty box glyph | `filled = 0` → `"░░░░░"` (5 cells); `filled = 4` → `"▓▓▓▓░"` (5 cells) | `filled = 5` → `""` (no empty glyph); the glyph is not U+25AF `▯` | R6 |
+| C32 | `BUILTIN_AGENT_IDS` | `["build", "compaction", "explore", "general", "summary", "title"]` (host v2.2.6 registry) | host builtin classification only (A.8) | agent list `[general, explore, coder]` → charter mode, member roles `[coder]`, `M = 1`; `[general, coder]` → charter mode even when `coder` is hidden or primary (mode looks at the unfiltered custom list) | list `[build, general, explore, title]` → no custom id, built-in mode, member roles `[explore, general]` (build primary, title hidden+primary), `M = 2`; list `[general, title]` → built-in mode, member roles `[general]`, `M = 1`; the id `title` must not be mistaken for a custom definition | R1, R2 |
+
+C32 is a set-membership boundary, not a width. The fits side is "the list has
+at least one id outside the set"; the does-not-fit side is "every id is in the
+set". The set must contain every host builtin, including hidden and primary
+ones: a missing id (for example `title`) would make every session look like a
+charter session. The value is the host registry the plugin ships against; a
+host version that adds a builtin id updates this constant and its fixtures in
+the same commit (F26).
 
 C19's `5.59` and `14.04` are the two real speeds observed in the live R6
 diagnostic (D1); which session they came from does not matter. They are sanity
@@ -692,6 +835,9 @@ One constant, one meaning, checked at the places the numbers collide:
   literal at the call site (C15). The separator belongs to `head` (its last
   cell), not to the bar: `head` is `W − 5` cells and the boxes are appended
   flush.
+- `BUILTIN_AGENT_IDS` (C32) owns the host builtin classification only. It is
+  not a row count, not a width, and never feeds `M` directly; `M` is
+  `members.roles.length` after `isVisibleRole` (A.8).
 
 Fixtures for C1 that pin the section-stop rule (R7, §4, F5). Width 35;
 sections built from roles and instances as stated.- Stop rule (discriminating): role `A` with 7 instances (8 body lines), then
@@ -794,7 +940,7 @@ C29 recomputation (independent budgets), pinned:
 
 Additional exact-value fixtures that carry no number:
 
-- Title `Project Team Members 1/5` for five visible roles and one active.
+- Title `Project Team Members 1/5` for five member roles and one active.
 - Compact line `sub 3` for three running subagents in scope.
 - Overflow line `+2 more · /subagents` exactly (U+00B7, one space each side).
 - Role row at width 35 with `agent.model = Go/Kimi K3.1 Pro`:
@@ -827,6 +973,75 @@ Additional exact-value fixtures that carry no number:
 - Idle ordering: `alpha`, `Zeta` → `alpha` before `Zeta`.
 - A failed instance at 29 999 ms is `grace`; the same session at 30 000 ms
   is absent and its role may be idle.
+
+### A.8 member-selection scenarios (exact values)
+
+Each scenario is a full `panel()` pass at width 35 with no overflow unless
+stated. `S` is the member snapshot; `A` is the live agent list; `sessions`
+are in the viewed tab.
+
+- **S1 — charter snapshot and stable `M`.** `S = memberSet([build(primary),
+  general(subagent), explore(subagent), coder(subagent), designer(subagent)])`
+  → `mode = "charter"`, roles `[coder, designer]`, `M = 2`. With no sessions:
+  title `Project Team Members 0/2`, rows ` 1.coder` and ` 2.designer` (idle,
+  alphabetical), `more = 0`. Later `A` gains `helper` and a `helper` session
+  runs: no `helper` row, `total` stays 2. Later `coder` is deleted from `A`:
+  the `coder` idle row stays (snapshot definition), `total` stays 2.
+- **S2 — built-in mode idle rows.** `A = [build(primary),
+  general(subagent), explore(subagent), title(hidden, primary),
+  summary(hidden, primary), compaction(hidden, primary)]` → no custom id,
+  `mode = "builtin"`, roles `[explore, general]`, `M = 2`. Rows are the two
+  idle builtins in name order; `build`, `title`, `summary` and `compaction`
+  have no row.
+- **S3 — charter suppresses builtin idle rows.** `A = [general, explore,
+  coder]` → charter mode, roles `[coder]`, `M = 1`. Title `Project Team
+  Members 0/1`; exactly one row, ` 1.coder`. `general` and `explore` have no
+  idle row.
+- **S4 — temporary builtin and member both work.** Same `S` as S3, plus a
+  running in-scope `general` child at 1000 (title `Audit`) and a running
+  in-scope `coder` child at 2000 (title `Check`). `mode = "charter"`, `M = 1`;
+  both roles have a working instance, so `N = 2` → title
+  `Project Team Members 2/1`. Busy order by oldest instance: `general` at 1000
+  before `coder` at 2000. Rows: ` 1.general` (active, definition colour),
+  ` └ Audit   ` (R8 model), ` 2.coder` (active), ` └ Check   ` (R8 model).
+  `total` did not move.
+- **S5 — succeeded temporary removes both.** S3 plus one running in-scope
+  `general` child at 1000; then it is no longer running and is not grace
+  (succeeded): no instance row and no `general` row. `N = 0`, `M = 1`; rows:
+  ` 1.coder` idle only; title `Project Team Members 0/1`.
+- **S6 — failed temporary keeps both for exactly 30 s.** S3 plus one running
+  in-scope `general` child at 1000; then it ends `outcome: failed` with
+  `time.updated = T`. At `now − T = 29_999`: `general` is a grace role with
+  one `└` grace instance, warning text, empty boxes; `coder` idle is second;
+  `N = 0`, `M = 1`, title `Project Team Members 0/1`. At `now − T = 30_000`:
+  both `general` rows are gone, `coder` is ` 1.coder`, title unchanged. This is
+  the temporary-row twin of C22.
+- **S7 — several temporary rows and a member.** `M = 1` (`coder`), with
+  running in-scope instances `explore` at 1000, `general` at 2000 and `coder`
+  at 3000. Busy order is `explore`, `general`, `coder`; numbers ` 1.` to
+  ` 3.`; `N = 3`, `M = 1`, title `Project Team Members 3/1`.
+- **S8 — non-member custom is invisible.** Charter snapshot `[coder]`; later
+  a `helper` definition appears and its in-scope child runs. No `helper`
+  section and no `helper` instance row; `N` counts only real sections, `M`
+  stays 1. The exception is builtin-only.
+- **S9 — built-in mode ignores a custom runner.** Built-in snapshot from
+  `[general, explore]`, `M = 2`. Later `coder` appears in `A` and runs: no
+  `coder` row, `total` stays 2.
+- **S10 — a temporary section folds whole.** Member `A` with 7 instances
+  (8 lines), then a temporary `general` with 2 instances (3 lines), then idle
+  member `B`. The body stops before `general`: 8 lines emitted, `more = 4`
+  (3 for `general` + 1 for `B`), no `general` row. `M` still counts `A` and
+  `B` (folded roles consume no number).
+- **S11 — C32 boundary.** `memberSet([general])` → builtin, `[general]`,
+  `M = 1`. `memberSet([general, coder])` → charter, `[coder]`, `M = 1`.
+  `memberSet([title])` → builtin, `[]`, `M = 0`. `memberSet([general,
+  helper(primary)])` → charter (custom exists), `[]`, `M = 0`; the panel
+  hides at `total = 0` even if `general` runs (F27).
+- **S12 — snapshot boundary.** Snapshot `[general, coder]` → charter, `M = 1`.
+  Before the next activation: delete `coder`, add `designer`, run `general`
+  and `designer`. Mode stays charter, `coder` remains a row, `designer` has
+  no row, `general` has a temporary row. Next plugin activation with
+  `[general, designer]` → still charter, roles `[designer]`, `M = 1`.
 
 ## 7. Known gaps
 
@@ -909,7 +1124,9 @@ not a gap: it registers a temporary diagnostic, with no contract number.
   **belt-and-braces** because the typed map does not expose it and its delivery
   is unverified. `session.step.ended` is the trigger the design relies on.
   Both bypass the once-per-session guard. Host-call side effect: verified in
-  review by inspection, not by a pure-layer fixture (R12).
+  review by inspection, not by a pure-layer fixture (R12). A.8 does not narrow
+  the sync gate: a temporary builtin is a visible agent, so its session syncs
+  and its bar fills like a member's (G20).
 - **G17 (R6)** — The speed computation does not exist. `lastUsage`
   (`src/lib/collect.ts:157-165`) and `contextPct` (`:167-179`) read the newest
   token report over `limit.context`; `contextLimit` (`:148-155`) finds the
@@ -947,6 +1164,19 @@ not a gap: it registers a temporary diagnostic, with no contract number.
   "▓"` (U+2593) and `BAR_GLYPH_EMPTY = "░"` (U+2591), one constant each, no
   other literal. Nothing else in the bar changes: `BAR_CELLS` stays 5, the
   arithmetic and colours are untouched (C30, C31, A.4).
+- **G20 (R1, R2, R3, R4, R7, §2.1, A.8)** — Member selection is live today:
+  `panel()` builds `roles` from every visible agent and `total` from its length
+  (`src/lib/collect.ts:504`, `:683`), so builtins always get idle rows even
+  when charter definitions exist, and a builtin can never be a temporary row
+  because it is always a member. Required: export `memberSet` and
+  `BUILTIN_AGENT_IDS` (C32); add `members` to `Sources`; take the snapshot once
+  in `src/tui.tsx` setup and pass it on every pass; make idle rows and `total`
+  come from `members.roles`; admit a busy section for a visible charter-mode
+  builtin that is not a member; leave `working` as the busy-active count. The
+  member snapshot's `AgentInfo` values serve member rows; the live list serves
+  temporary builtins and R8. `isVisibleChild` stays permissive (any visible
+  agent), or a temporary builtin's messages never sync (G16). R5 arithmetic,
+  R6 bars, glyphs, tones and every C1–C31 value are unchanged.
 - **D1 debug option (temporary diagnostic, not in the contract).** The plugin
   accepts `debug: true` or `debug: "<path>"` and appends one JSONL record per
   recompute to `/tmp/opencode/subagent-model-debug.jsonl`; the string form
@@ -965,9 +1195,9 @@ settled by the Designer alone; the Project Manager takes them to the Analyst
 (or the human) for the final wording. F3 and F14 are settled by Product
 updates; F16 is settled (human decision A1); F17 is obsolete at A.3; F18–F22
 are the new decisions A.3 forces; F23 is settled (human decision A.4); F24 is
-settled (human decision A.5); F20 is obsolete at A.6 (human decision). F16,
-F17, F20, F23 and F24 are listed with their source rather than as requests for
-an answer.
+settled (human decision A.5); F20 is obsolete at A.6 (human decision).
+F25–F28 are the new points A.8 surfaces. F16, F17, F20, F23 and F24 are listed
+with their source rather than as requests for an answer.
 
 - **F1 (R5 width domain).** R5 gives no lower bound on `width`. Below 19 cells
   the role row cannot hold its fields; the design raises the effective width
@@ -1115,6 +1345,32 @@ an answer.
   for two fields (`ROLE_BAR_GAP_CELLS`, `INSTANCE_BAR_GAP_CELLS`, C15); the
   glyphs are unchanged (`▓`/`░`, A.4, F23). Recorded as a settled decision,
   not an open question.
+- **F25 (R2 snapshot boundary, A.8).** R2 says the mode is decided "at session
+  start (or plugin activation)". The design takes the snapshot on the first
+  render for a location and reuses it for the life of the plugin instance; the
+  next snapshot for that location is the next plugin activation, not a new
+  conversation in the same TUI process. A brand-new location takes its own
+  first snapshot, and a missing first read delays it, never re-decides it.
+  Confirm this boundary (S12).
+- **F26 (R2 builtin identity, A.8).** The host `AgentInfo` has no origin field,
+  so the design distinguishes charter definitions from built-ins by
+  `BUILTIN_AGENT_IDS` (C32), the host v2.2.6 registry. Consequences: a custom
+  agent defined only in `opencode.json` (not `.opencode/agents`) also selects
+  charter mode, and a project file that overrides a builtin id stays
+  builtin-classified. Confirm the set and the "definition" proxy, or name the
+  host field that carries origin.
+- **F27 (R1 charter with no visible definition, A.8).** A charter mode can have
+  `M = 0` (the only definitions are hidden or primary). The design keeps R1's
+  `total > 0` visibility rule, so the panel hides and no temporary builtin row
+  can render (the computed title would be `0/0`). Confirm, or say the panel
+  must show a running temporary builtin even when `M = 0`.
+- **F28 (R2 exception vs R3 tab scope, A.8).** R2 says a builtin gets its
+  temporary row while "at least one child session is in flight"; R3 scopes
+  every instance row to the viewed tab. The design inherits R3's scope: only
+  an in-scope instance materialises the temporary row, so a builtin working
+  solely in another tab has no row here (and no idle builtin row). Confirm, or
+  say the temporary row must appear for an out-of-scope session with no
+  visible instance line.
 
 ## 9. Revision notes
 
@@ -1158,3 +1414,25 @@ an answer.
   70), G17's formula and constants list, and F20's boundary list. No column,
   glyph, width, tone, separator, or §2 source row changed; `BAR_CELLS`,
   `FILL_MIN_BOXES` and `FILL_MAX_BOXES` are untouched.
+- **A.8 member-selection amendment.** Human decision at the R1/R2/R3/R4 level:
+  the panel's member set is a snapshot. `memberSet` (C32) selects charter mode
+  when the host agent list holds any id outside `BUILTIN_AGENT_IDS`, else
+  built-in mode; the TUI takes one snapshot per location on its first render
+  and never recomputes it (§2.1).
+  Charter mode lists the visible `.opencode/agents` definitions only; builtins
+  lose their idle rows and appear only as temporary rows while an in-scope
+  instance is active or in grace. `total` (`M`) is the member-role count and
+  never moves with temporary rows; `working` (`N`) includes them, so `N` can
+  exceed `M` (S4). **Superseded:** R2 previously listed "builtin agents plus project
+  agent definitions" unconditionally, with no mode; §0's Role definition,
+  §3's idle predicate, §4's idle list and `total`, and §6's fixtures all
+  followed that unconditional set. The member filter is new, not a
+  clarification. **Moved:** §0 (Role, Instance, View `mode`/`total`/
+  `working`), R1, R2, R3, R4, R7, R9 (one clarifying sentence), §2 source
+  rows and the new §2.1, §3, §4, §5 (one sentence), §6 (new C32 and S1–S12),
+  §7 (new G20 and the G16 sentence), §8 (new F25–F28). **Unchanged:** R5 width
+  numbers, R6 bar logic, `FILL_BANDS`, glyphs, tones, and every C1–C31 value.
+  The R9 picker needs no change: it lists running subagent sessions only, so a
+  running builtin already appears and nothing idle is listed; its reference to
+  R3's running-child predicate stays true because that predicate is unchanged,
+  only the role attribution is.

@@ -8,7 +8,7 @@ This plugin shows which model each active subagent is using, so you can quickly 
 
 It is especially useful when you use different models for your main agent and subagents and want to confirm that each subagent is using the intended model from its configuration.
 
-Current version: `0.8.0`
+Current version: `0.9.0`
 
 Project renamed to `subagent-live-status-plugin` (was `opencode-subagent-model`); plugin id, storage namespace, and command ids move with it — the persisted compact toggle resets once.
 
@@ -85,7 +85,7 @@ sub 3
 
 ## How it works
 
-The panel lists every subagent-capable agent the host knows: builtin agents and the ones from `.opencode/agents/*.md`, skipping agents marked `hidden` and primary agents.
+Which agents the panel shows is decided once per session as a snapshot: with at least one agent definition in `.opencode/agents` (charter mode) it lists only those definitions (skipping agents marked `hidden` and primary agents), and built-in agents appear only as temporary rows while one of their sessions is running in this tab — a failed or interrupted one keeps its row for the 30-second grace window, then the row disappears with it. Without any `.opencode/agents` definition the panel falls back to listing the host's built-in agents, again skipping `hidden` and primary agents. Mid-session changes to `.opencode/agents` take effect on the next session, not the running one.
 
 A session becomes an instance row when it is a child session currently marked `running`, and it belongs to the tab the viewer is in. A session that ended with `outcome: failed` or `interrupted` stays visible for a 30-second grace window before collapsing back into its role row.
 

@@ -5,6 +5,7 @@ import {
   BAR_GLYPH_EMPTY,
   BAR_GLYPH_FILLED,
   BODY_MAX_LINES,
+  BUILTIN_AGENT_IDS,
   DEFAULT_WIDTH,
   ELLIPSIS_CELLS,
   FILL_BANDS,
@@ -40,12 +41,14 @@ import {
   filterRows,
   labeler,
   isVisibleRole,
+  memberSet,
   panel,
   matches,
   pickerTitle,
   resolveModel,
   speedTps,
   type AgentInfo,
+  type MemberSet,
   type RunningSubagent,
   type SessionInfo,
   type SessionSource,
@@ -124,12 +127,14 @@ function rootSources(
   agents: AgentInfo[],
   running: string[] = [],
   messages: Record<string, ReadonlyArray<TestMessage>> = {},
+  members: MemberSet = memberSet(agents),
 ): Sources {
   return {
     sessions: fakeSessions([{ id: "root" }, ...sessions], running, messages),
     agents,
     models,
     providers,
+    members,
   }
 }
 
@@ -260,6 +265,9 @@ test("fitModel gives the provider half at most and the model the rest", () => {
 
 test("instance rows show an 8-cell title and a 12-cell model", () => {
   const NOW = 1_000_000
+  const agents = [
+    { id: "aa", name: "Alpha", mode: "subagent", model: { id: "deepseek-flash", providerID: "deepseek" } },
+  ]
   const sources: Sources = {
     sessions: fakeSessions(
       [
@@ -275,9 +283,10 @@ test("instance rows show an 8-cell title and a 12-cell model", () => {
       ],
       ["long-title"],
     ),
-    agents: [{ id: "aa", name: "Alpha", mode: "subagent", model: { id: "deepseek-flash", providerID: "deepseek" } }],
+    agents,
     models,
     providers,
+    members: memberSet(agents),
   }
 
   const view = panel(sources, "root", 35, 10, NOW)
@@ -340,6 +349,7 @@ test("panel lists roles, nests working instances, and hides expired failures", (
     agents,
     models,
     providers,
+    members: memberSet(agents),
   }
 
   const view = panel(sources, "root", 35, 10, NOW)
@@ -369,7 +379,7 @@ test("panel caps the body and folds nothing under an incomplete role", () => {
     name: `Agent${index}`,
     mode: "subagent" as const,
   }))
-  const sources: Sources = { sessions: fakeSessions([]), agents }
+  const sources: Sources = { sessions: fakeSessions([]), agents, members: memberSet(agents) }
   const view = panel(sources, undefined, 35, 10, 0)
   assert.equal(view.rows.length, 10)
   assert.equal(view.more, 2)
@@ -378,7 +388,7 @@ test("panel caps the body and folds nothing under an incomplete role", () => {
 
 test("panel falls back to the agent or session model for the role row", () => {
   const agents = [{ id: "alpha", name: "Alpha", mode: "subagent", model: { id: "deepseek-flash", providerID: "deepseek" } }]
-  const sources: Sources = { sessions: fakeSessions([]), agents, models, providers }
+  const sources: Sources = { sessions: fakeSessions([]), agents, models, providers, members: memberSet(agents) }
   const view = panel(sources, undefined, 35, 10, 0)
   assert.match(view.rows[0].head, /DeepSe/)
 })
@@ -422,11 +432,13 @@ function runningRole(id: string, name: string, count: number, start: number) {
 }
 
 function roleWithModel(providerName: string, modelName: string): Sources {
+  const agents = [agent("a", "A", { model: { id: "m", providerID: "p" } })]
   return {
     sessions: fakeSessions([{ id: "root" }]),
-    agents: [agent("a", "A", { model: { id: "m", providerID: "p" } })],
+    agents,
     models: [{ id: "m", modelID: "m", providerID: "p", name: modelName }],
     providers: [{ id: "p", name: providerName }],
+    members: memberSet(agents),
   }
 }
 
@@ -493,11 +505,13 @@ test("C5 ROLE_NAME_CELLS = 9 clips names with an ellipsis", () => {
 
 test("C6 ROLE_NAME_GAP_CELLS = 1 keeps the gap column clear", () => {
   assert.equal(ROLE_NAME_GAP_CELLS, 1)
+  const agents = [agent("explore", "explore", { model: { id: "kimi", providerID: "go" } })]
   const sources: Sources = {
     sessions: fakeSessions([{ id: "root" }]),
-    agents: [agent("explore", "explore", { model: { id: "kimi", providerID: "go" } })],
+    agents,
     models: [{ id: "kimi", modelID: "kimi", providerID: "go", name: "Kimi K3.1 Pro" }],
     providers: [{ id: "go", name: "OpenCode Go" }],
+    members: memberSet(agents),
   }
   const head = panel(sources, undefined, 35, BODY_MAX_LINES, 0).rows[0].head
   assert.equal(head, " 1.explore   Go/Kimi K3.1 Pro ")
@@ -537,6 +551,7 @@ test("C9 BAR_CELLS = 5 boxes", () => {
 
 test("C10 INSTANCE_INDENT_CELLS = 3 with the tree glyphs", () => {
   assert.equal(INSTANCE_INDENT_CELLS, 3)
+  const agents = [agent("a", "A")]
   const sources: Sources = {
     sessions: fakeSessions(
       [
@@ -560,9 +575,10 @@ test("C10 INSTANCE_INDENT_CELLS = 3 with the tree glyphs", () => {
       ],
       ["i1", "i2"],
     ),
-    agents: [agent("a", "A")],
+    agents,
     models: [{ id: "grok47", modelID: "grok47", providerID: "go", name: "Grok 4.7" }],
     providers: [{ id: "go", name: "OpenCode Go" }],
+    members: memberSet(agents),
   }
   const view = panel(sources, "root", 35, BODY_MAX_LINES, 0)
   const first = view.rows[1].head
@@ -608,6 +624,7 @@ test("C13 INSTANCE_MODEL_CELLS = 12 uses the split rule", () => {
   assert.equal(clip("OpenCode/Kimi K3.1 Pro", 12), "OpenCode/Ki…")
   assert.notEqual(fitModel("OpenCode/Kimi K3.1 Pro", 12), clip("OpenCode/Kimi K3.1 Pro", 12))
 
+  const agents = [agent("a", "A")]
   const sources: Sources = {
     sessions: fakeSessions(
       [
@@ -623,9 +640,10 @@ test("C13 INSTANCE_MODEL_CELLS = 12 uses the split rule", () => {
       ],
       ["kimi"],
     ),
-    agents: [agent("a", "A")],
+    agents,
     models: [{ id: "kimi-k31", modelID: "kimi-k31", providerID: "opencode", name: "Kimi K3.1 Pro" }],
     providers: [{ id: "opencode", name: "OpenCode" }],
+    members: memberSet(agents),
   }
   const view = panel(sources, "root", 35, BODY_MAX_LINES, 0)
   assert.equal(view.rows[1].head.slice(12, 30), "Open…/Kimi …      ")
@@ -647,19 +665,22 @@ test("C15 one separator cell sits between the model column and the boxes", () =>
   assert.equal(ROLE_BAR_GAP_CELLS, 1)
   assert.equal(INSTANCE_BAR_GAP_CELLS, 1)
 
-  const roleHead = (id: string, name: string) =>
-    panel(
+  const roleHead = (id: string, name: string) => {
+    const agents = [agent("explore", "explore", { model: { id, providerID: "go" } })]
+    return panel(
       {
         sessions: fakeSessions([{ id: "root" }]),
-        agents: [agent("explore", "explore", { model: { id, providerID: "go" } })],
+        agents,
         models: [{ id, modelID: id, providerID: "go", name }],
         providers: [{ id: "go", name: "OpenCode Go" }],
+        members: memberSet(agents),
       },
       undefined,
       35,
       BODY_MAX_LINES,
       0,
     ).rows[0].head
+  }
 
   // Fits: an 11-cell label leaves 5 pad cells in the 16-cell column, then the
   // separator, so the head ends with 6 spaces.
@@ -680,8 +701,9 @@ test("C15 one separator cell sits between the model column and the boxes", () =>
   assert.notEqual(roleHead("grok47f", "Grok 4.7 Flash"), " 1.explore   Go/Grok 4.7     ")
   assert.equal(cellWidth(" 1.explore   Go/Grok 4.7     "), 29)
 
-  const instanceHead = (id: string, name: string) =>
-    panel(
+  const instanceHead = (id: string, name: string) => {
+    const agents = [agent("a", "A")]
+    return panel(
       {
         sessions: fakeSessions(
           [
@@ -705,15 +727,17 @@ test("C15 one separator cell sits between the model column and the boxes", () =>
           ],
           ["g", "g2"],
         ),
-        agents: [agent("a", "A")],
+        agents,
         models: [{ id, modelID: id, providerID: "go", name }],
         providers: [{ id: "go", name: "OpenCode Go" }],
+        members: memberSet(agents),
       },
       "root",
       35,
       BODY_MAX_LINES,
       0,
     ).rows[1].head
+  }
 
   // Fits: 12-cell text + 5 pad + 1 separator in the 17-cell column.
   assert.equal(instanceHead("grok47", "Grok 4.7"), " ├ Inspect… Go/Grok 4.7       ")
@@ -730,6 +754,7 @@ test("C15 one separator cell sits between the model column and the boxes", () =>
 
 test("F21 above width 35 the instance text stays 12 cells and the column pads", () => {
   const at = (id: string, modelName: string) => {
+    const agents = [agent("a", "A")]
     const sources: Sources = {
       sessions: fakeSessions(
         [
@@ -745,9 +770,10 @@ test("F21 above width 35 the instance text stays 12 cells and the column pads", 
         ],
         ["g"],
       ),
-      agents: [agent("a", "A")],
+      agents,
       models: [{ id, modelID: id, providerID: "go", name: modelName }],
       providers: [{ id: "go", name: "OpenCode Go" }],
+      members: memberSet(agents),
     }
     return panel(sources, "root", 39, BODY_MAX_LINES, 0).rows[1].head
   }
@@ -1005,6 +1031,7 @@ test("R6 unknown speed keeps both rows' boxes empty", () => {
     agents: [agent("aa", "Alpha")],
     models,
     providers,
+    members: memberSet([agent("aa", "Alpha")]),
   }
 
   const view = panel(sources, "root", 35, BODY_MAX_LINES, NOW)
@@ -1026,6 +1053,9 @@ test("role row carries the busiest active instance tps and fill (G13)", () => {
     agents: [agent("aa", "Alpha", { model: { id: "deepseek-flash", providerID: "deepseek" } })],
     models,
     providers,
+    members: memberSet([
+      agent("aa", "Alpha", { model: { id: "deepseek-flash", providerID: "deepseek" } }),
+    ]),
   }
 
   const view = panel(sources, "root", 35, BODY_MAX_LINES, NOW)
@@ -1047,6 +1077,9 @@ test("role row keeps the known tps when the other instance is unknown (G13)", ()
     agents: [agent("aa", "Alpha", { model: { id: "deepseek-flash", providerID: "deepseek" } })],
     models,
     providers,
+    members: memberSet([
+      agent("aa", "Alpha", { model: { id: "deepseek-flash", providerID: "deepseek" } }),
+    ]),
   }
 
   const view = panel(sources, "root", 35, BODY_MAX_LINES, NOW)
@@ -1071,6 +1104,7 @@ test("F18 a grace instance and its role show empty boxes", () => {
     agents: [agent("aa", "Alpha")],
     models,
     providers,
+    members: memberSet([agent("aa", "Alpha")]),
   }
 
   const view = panel(sources, "root", 35, BODY_MAX_LINES, NOW)
@@ -1091,6 +1125,7 @@ test("F22 speed never reads now and an in-flight message never counts", () => {
     agents: [agent("aa", "Alpha")],
     models,
     providers,
+    members: memberSet([agent("aa", "Alpha")]),
   }
 
   const early = panel(sources, "root", 35, BODY_MAX_LINES, 0)
@@ -1106,6 +1141,7 @@ test("F22 speed never reads now and an in-flight message never counts", () => {
     agents: [agent("aa", "Alpha")],
     models,
     providers,
+    members: memberSet([agent("aa", "Alpha")]),
   }
   const view = panel(incomplete, "root", 35, BODY_MAX_LINES, 0)
   assert.equal(view.rows[1].tps, undefined)
@@ -1185,11 +1221,13 @@ test("stop rule: five instances leave room for four idle roles", () => {
 /* ------------------------------------------------------------------ */
 
 test("role row at width 35 fills the model column exactly", () => {
+  const agents = [agent("explore", "explore", { model: { id: "kimi", providerID: "go" } })]
   const sources: Sources = {
     sessions: fakeSessions([{ id: "root" }]),
-    agents: [agent("explore", "explore", { model: { id: "kimi", providerID: "go" } })],
+    agents,
     models: [{ id: "kimi", modelID: "kimi", providerID: "go", name: "Kimi K3.1 Pro" }],
     providers: [{ id: "go", name: "OpenCode Go" }],
+    members: memberSet(agents),
   }
   const head = panel(sources, undefined, 35, BODY_MAX_LINES, 0).rows[0].head
   assert.equal(head, " 1.explore   Go/Kimi K3.1 Pro ")
@@ -1197,6 +1235,7 @@ test("role row at width 35 fills the model column exactly", () => {
 })
 
 test("instance row at width 35 pads the model column", () => {
+  const agents = [agent("a", "A")]
   const sources: Sources = {
     sessions: fakeSessions(
       [
@@ -1220,9 +1259,10 @@ test("instance row at width 35 pads the model column", () => {
       ],
       ["grok", "later"],
     ),
-    agents: [agent("a", "A")],
+    agents,
     models: [{ id: "grok47", modelID: "grok47", providerID: "go", name: "Grok 4.7" }],
     providers: [{ id: "go", name: "OpenCode Go" }],
+    members: memberSet(agents),
   }
   const head = panel(sources, "root", 35, BODY_MAX_LINES, 0).rows[1].head
   assert.equal(head, " ├ Inspect… Go/Grok 4.7       ")
@@ -1231,6 +1271,7 @@ test("instance row at width 35 pads the model column", () => {
 
 test("speed bar follows the separator at width 35 (filled = 3)", () => {
   const NOW = 1_000_000
+  const agents = [agent("explore", "explore", { model: { id: "kimi", providerID: "go" } })]
   const sources: Sources = {
     sessions: fakeSessions(
       [
@@ -1240,9 +1281,10 @@ test("speed bar follows the separator at width 35 (filled = 3)", () => {
       ["i"],
       { i: [assistant(50, 0, 1_000)] },
     ),
-    agents: [agent("explore", "explore", { model: { id: "kimi", providerID: "go" } })],
+    agents,
     models: [{ id: "kimi", modelID: "kimi", providerID: "go", name: "Kimi K3.1 Pro" }],
     providers: [{ id: "go", name: "OpenCode Go" }],
+    members: memberSet(agents),
   }
   const bar = (filled: number) =>
     BAR_GLYPH_FILLED.repeat(filled) + BAR_GLYPH_EMPTY.repeat(BAR_CELLS - filled)
@@ -1263,6 +1305,28 @@ test("title counts and compact count follow the view", () => {
 
   const three = runningRole("aa", "Alpha", 3, 100)
   assert.equal(collect(rootSources(three.sessions, [three.agent], three.running), "root").length, 3)
+
+  // Two different fields: title N = roles with a working instance, compact N =
+  // running subagents in scope. Two running children -> 1 and 2.
+  const pair = runningRole("aa", "Alpha", 2, 100)
+  const pairSources = rootSources(pair.sessions, [pair.agent], pair.running)
+  assert.equal(panel(pairSources, "root", 35, BODY_MAX_LINES, 0).working, 1)
+  assert.equal(collect(pairSources, "root").length, 2)
+
+  // A non-member runner syncs for the compact count but cannot enter the title.
+  const members = memberSet([agent("coder", "coder")])
+  const helper = child("h-1", "helper", 1_000)
+  const runnerSources = rootSources(
+    [helper],
+    [agent("coder", "coder"), agent("helper", "helper")],
+    ["h-1"],
+    {},
+    members,
+  )
+  const runnerView = panel(runnerSources, "root", 35, BODY_MAX_LINES, 0)
+  assert.equal(runnerView.working, 0)
+  assert.equal(runnerView.total, 1)
+  assert.equal(collect(runnerSources, "root").length, 1)
 })
 
 test("ordering: oldest instance first between and inside roles", () => {
@@ -1308,4 +1372,431 @@ test("isVisibleRole excludes hidden and primary agents only (R2)", () => {
   assert.equal(isVisibleRole({ id: "hidden", hidden: true }), false)
   assert.equal(isVisibleRole({ id: "lead", mode: "primary" }), false)
   assert.equal(isVisibleRole({ id: "hidden-lead", mode: "primary", hidden: true }), false)
+})
+
+/* ------------------------------------------------------------------ */
+/* A.8 member-selection scenarios S1-S12, exact values.                */
+/* ------------------------------------------------------------------ */
+
+const CHARTER_LIST = [
+  agent("build", "build", { mode: "primary" }),
+  agent("general", "general"),
+  agent("explore", "explore"),
+  agent("coder", "coder"),
+  agent("designer", "designer"),
+]
+
+/** A role row with a blank model column at width 35: number, name, gap, 16, separator. */
+function blankRoleHead(number: number, name: string): string {
+  const padding = ROLE_NAME_CELLS - name.length
+  return `${String(number).padStart(ROLE_NUMBER_DIGITS)}.${name}${" ".repeat(padding + 1 + 16 + 1)}`
+}
+
+test("C32 BUILTIN_AGENT_IDS is the host builtin registry", () => {
+  assert.deepEqual(BUILTIN_AGENT_IDS, [
+    "build",
+    "compaction",
+    "explore",
+    "general",
+    "summary",
+    "title",
+  ])
+  // Fits: one id outside the set selects charter mode.
+  assert.equal(memberSet([agent("general", "general"), agent("coder", "coder")]).mode, "charter")
+  // Does not fit: every id is builtin, so built-in mode is selected.
+  assert.equal(memberSet([agent("general", "general"), agent("title", "title")]).mode, "builtin")
+})
+
+test("S1 charter snapshot keeps M and member rows stable", () => {
+  const snapshot = memberSet(CHARTER_LIST)
+  assert.equal(snapshot.mode, "charter")
+  assert.deepEqual(
+    snapshot.roles.map((role) => role.id),
+    ["coder", "designer"],
+  )
+
+  const view = panel(
+    rootSources([], CHARTER_LIST, [], {}, snapshot),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+  assert.equal(view.mode, "charter")
+  assert.equal(view.working, 0)
+  assert.equal(view.total, 2)
+  assert.equal(view.more, 0)
+  assert.equal(view.rows.length, 2)
+  // Idle rows are alphabetical by display name.
+  assert.equal(view.rows[0].head, blankRoleHead(1, "coder"))
+  assert.equal(view.rows[1].head, blankRoleHead(2, "designer"))
+
+  // A helper definition and a running helper appear: no helper row, M stays 2.
+  const laterAgents = [...CHARTER_LIST, agent("helper", "helper")]
+  const helperRun = child("h-1", "helper", 1_000)
+  const later = panel(
+    rootSources([helperRun], laterAgents, ["h-1"], {}, snapshot),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+  assert.equal(later.total, 2)
+  assert.equal(later.working, 0)
+  assert.equal(later.rows.some((row) => row.head.includes("helper")), false)
+
+  // coder disappears from the live list: the snapshot definition keeps its row.
+  const deleted = CHARTER_LIST.filter((entry) => entry.id !== "coder")
+  const afterDelete = panel(
+    rootSources([], deleted, [], {}, snapshot),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+  assert.equal(afterDelete.total, 2)
+  assert.equal(afterDelete.rows[0].head, blankRoleHead(1, "coder"))
+  assert.equal(afterDelete.rows[1].head, blankRoleHead(2, "designer"))
+})
+
+test("S2 built-in mode lists visible builtins only", () => {
+  const agents = [
+    agent("build", "build", { mode: "primary" }),
+    agent("general", "general"),
+    agent("explore", "explore"),
+    agent("title", "title", { mode: "primary", hidden: true }),
+    agent("summary", "summary", { mode: "primary", hidden: true }),
+    agent("compaction", "compaction", { mode: "primary", hidden: true }),
+  ]
+  const snapshot = memberSet(agents)
+  assert.equal(snapshot.mode, "builtin")
+  assert.deepEqual(snapshot.roles.map((role) => role.id).sort(), ["explore", "general"])
+
+  const view = panel(rootSources([], agents, [], {}, snapshot), undefined, 35, BODY_MAX_LINES, 0)
+  assert.equal(view.mode, "builtin")
+  assert.equal(view.total, 2)
+  assert.equal(view.rows.length, 2)
+  assert.equal(view.rows[0].head, blankRoleHead(1, "explore"))
+  assert.equal(view.rows[1].head, blankRoleHead(2, "general"))
+})
+
+test("S3 charter mode suppresses builtin idle rows", () => {
+  const agents = [agent("general", "general"), agent("explore", "explore"), agent("coder", "coder")]
+  const snapshot = memberSet(agents)
+  assert.equal(snapshot.mode, "charter")
+  assert.deepEqual(snapshot.roles.map((role) => role.id), ["coder"])
+
+  const view = panel(rootSources([], agents, [], {}, snapshot), undefined, 35, BODY_MAX_LINES, 0)
+  assert.equal(view.working, 0)
+  assert.equal(view.total, 1)
+  assert.equal(view.rows.length, 1)
+  assert.equal(view.rows[0].head, blankRoleHead(1, "coder"))
+})
+
+test("S4 temporary builtin and member both work gives 2/1", () => {
+  const agents = [agent("general", "general"), agent("explore", "explore"), agent("coder", "coder")]
+  const snapshot = memberSet(agents)
+  const audit = child("a-1", "general", 1_000, { title: "Audit" })
+  const check = child("c-1", "coder", 2_000, { title: "Check" })
+  const view = panel(
+    rootSources([audit, check], agents, ["a-1", "c-1"], {}, snapshot),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+
+  assert.equal(view.mode, "charter")
+  assert.equal(view.working, 2)
+  assert.equal(view.total, 1)
+  assert.equal(`${view.working}/${view.total}`, "2/1")
+  assert.equal(view.rows.length, 4)
+  assert.equal(view.rows[0].head, blankRoleHead(1, "general"))
+  assert.equal(view.rows[0].state, "active")
+  // 8-cell title field pads without an ellipsis when it fits.
+  assert.equal(view.rows[1].head, " └ Audit    unknown mod…      ")
+  assert.equal(view.rows[1].head.slice(3, 11), "Audit   ")
+  assert.equal(view.rows[2].head, blankRoleHead(2, "coder"))
+  assert.equal(view.rows[3].head, " └ Check    unknown mod…      ")
+  assert.equal(view.rows[3].head.slice(3, 11), "Check   ")
+})
+
+test("R8 a temporary builtin resolves its live definition model", () => {
+  const general = agent("general", "general", {
+    model: { id: "deepseek-flash", providerID: "deepseek" },
+  })
+  const members = memberSet([general, agent("coder", "coder")])
+  const audit = child("a-1", "general", 1_000, { title: "Audit" })
+  const view = panel(rootSources([audit], [general, agent("coder", "coder")], ["a-1"], {}, members), "root", 35, BODY_MAX_LINES, 0)
+
+  assert.equal(view.total, 1)
+  assert.equal(view.rows[0].head, " 1.general   DeepSe…/DeepSee… ")
+  assert.equal(view.rows[1].head, " └ Audit    Deep…/DeepS…      ")
+})
+
+test("S5 a succeeded temporary last instance removes both rows", () => {
+  const agents = [agent("general", "general"), agent("explore", "explore"), agent("coder", "coder")]
+  const snapshot = memberSet(agents)
+  const succeeded = child("a-1", "general", 1_000, {
+    title: "Audit",
+    outcome: "succeeded",
+    time: { created: 1_000, updated: 2_000 },
+  })
+  const view = panel(
+    rootSources([succeeded], agents, [], {}, snapshot),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+
+  assert.equal(view.working, 0)
+  assert.equal(view.total, 1)
+  assert.equal(`${view.working}/${view.total}`, "0/1")
+  assert.equal(view.rows.length, 1)
+  assert.equal(view.rows[0].head, blankRoleHead(1, "coder"))
+  assert.equal(view.rows[0].state, "idle")
+})
+
+test("S6 a failed temporary keeps both rows for exactly 30 s", () => {
+  const agents = [agent("general", "general"), agent("explore", "explore"), agent("coder", "coder")]
+  const snapshot = memberSet(agents)
+  const ended = 100_000
+  const failed = child("a-1", "general", 1_000, {
+    title: "Audit",
+    outcome: "failed",
+    time: { created: 1_000, updated: ended },
+  })
+
+  const inside = panel(
+    rootSources([failed], agents, [], {}, snapshot),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    ended + 29_999,
+  )
+  assert.equal(inside.working, 0)
+  assert.equal(inside.total, 1)
+  assert.equal(`${inside.working}/${inside.total}`, "0/1")
+  assert.equal(inside.rows.length, 3)
+  assert.equal(inside.rows[0].head, blankRoleHead(1, "general"))
+  assert.equal(inside.rows[0].state, "grace")
+  assert.equal(inside.rows[1].head, " └ Audit    unknown mod…      ")
+  assert.equal(inside.rows[1].state, "grace")
+  assert.equal(inside.rows[2].head, blankRoleHead(2, "coder"))
+  assert.equal(inside.rows[2].state, "idle")
+
+  const boundary = panel(
+    rootSources([failed], agents, [], {}, snapshot),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    ended + 30_000,
+  )
+  assert.equal(boundary.working, 0)
+  assert.equal(boundary.total, 1)
+  assert.equal(`${boundary.working}/${boundary.total}`, "0/1")
+  assert.equal(boundary.rows.length, 1)
+  assert.equal(boundary.rows[0].head, blankRoleHead(1, "coder"))
+})
+
+test("S7 several temporary rows order with a member by instance start", () => {
+  const agents = [agent("general", "general"), agent("explore", "explore"), agent("coder", "coder")]
+  const snapshot = memberSet(agents)
+  const sessions = [
+    child("e-1", "explore", 1_000),
+    child("g-1", "general", 2_000),
+    child("c-1", "coder", 3_000),
+  ]
+  const view = panel(
+    rootSources(sessions, agents, sessions.map((session) => session.id), {}, snapshot),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+
+  assert.equal(view.working, 3)
+  assert.equal(view.total, 1)
+  assert.equal(`${view.working}/${view.total}`, "3/1")
+  assert.equal(view.rows[0].head, blankRoleHead(1, "explore"))
+  assert.equal(view.rows[2].head, blankRoleHead(2, "general"))
+  assert.equal(view.rows[4].head, blankRoleHead(3, "coder"))
+})
+
+test("S8 a non-member custom runner stays invisible", () => {
+  const members = memberSet([agent("general", "general"), agent("coder", "coder")])
+  const live = [agent("general", "general"), agent("coder", "coder"), agent("helper", "helper")]
+  const helper = child("h-1", "helper", 1_000)
+  const view = panel(rootSources([helper], live, ["h-1"], {}, members), "root", 35, BODY_MAX_LINES, 0)
+
+  assert.equal(view.working, 0)
+  assert.equal(view.total, 1)
+  assert.equal(view.rows.length, 1)
+  assert.equal(view.rows[0].head, blankRoleHead(1, "coder"))
+  assert.equal(view.rows.some((row) => row.head.includes("helper")), false)
+})
+
+test("S9 built-in mode ignores a custom runner", () => {
+  const members = memberSet([agent("general", "general"), agent("explore", "explore")])
+  const live = [agent("general", "general"), agent("explore", "explore"), agent("coder", "coder")]
+  const coder = child("c-1", "coder", 1_000)
+  const view = panel(rootSources([coder], live, ["c-1"], {}, members), "root", 35, BODY_MAX_LINES, 0)
+
+  assert.equal(view.mode, "builtin")
+  assert.equal(view.total, 2)
+  assert.equal(view.working, 0)
+  assert.equal(view.rows.length, 2)
+  assert.equal(view.rows.some((row) => row.head.includes("coder")), false)
+})
+
+test("S10 a temporary section folds whole and keeps M", () => {
+  const a = runningRole("a", "A", 7, 100)
+  const general = runningRole("general", "general", 2, 200)
+  const b = agent("b", "B")
+  const members = memberSet([general.agent, a.agent, b])
+  const view = panel(
+    rootSources([...a.sessions, ...general.sessions], [general.agent, a.agent, b], [...a.running, ...general.running], {}, members),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+
+  assert.equal(view.total, 2)
+  assert.equal(view.working, 2)
+  assert.equal(view.rows.length, 8)
+  assert.equal(view.more, 4)
+  assert.equal(view.rows.some((row) => row.head.includes("general")), false)
+  assert.equal(view.rows.some((row) => row.head.includes("B")), false)
+})
+
+test("S11 C32 boundary and the total = 0 guard", () => {
+  const builtin = memberSet([agent("general", "general")])
+  assert.equal(builtin.mode, "builtin")
+  assert.deepEqual(builtin.roles.map((role) => role.id), ["general"])
+  assert.equal(builtin.roles.length, 1)
+
+  const charter = memberSet([agent("general", "general"), agent("coder", "coder")])
+  assert.equal(charter.mode, "charter")
+  assert.deepEqual(charter.roles.map((role) => role.id), ["coder"])
+  assert.equal(charter.roles.length, 1)
+
+  const titleOnly = memberSet([agent("title", "title", { mode: "primary", hidden: true })])
+  assert.equal(titleOnly.mode, "builtin")
+  assert.deepEqual(titleOnly.roles, [])
+
+  const primaryOnly = memberSet([agent("general", "general"), agent("helper", "helper", { mode: "primary" })])
+  assert.equal(primaryOnly.mode, "charter")
+  assert.deepEqual(primaryOnly.roles, [])
+
+  const running = child("g-1", "general", 1_000)
+  const hidden = panel(
+    rootSources([running], [agent("general", "general")], ["g-1"], {}, primaryOnly),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+  assert.equal(hidden.total, 0)
+  // The pure layer still emits the temporary section; the F27 hide gate is
+  // `total > 0`, so a total of 0 renders nothing (docs/design.md §3, F27).
+  assert.equal(hidden.working, 1)
+  assert.equal(hidden.rows.length, 2)
+  assert.equal(hidden.rows[0].head, blankRoleHead(1, "general"))
+  assert.equal(hidden.rows[0].state, "active")
+  assert.equal(hidden.rows[1].head, " └ g-1      unknown mod…      ")
+  assert.equal(hidden.rows[1].state, "active")
+  assert.equal(hidden.total > 0, false)
+})
+
+test("a missing member snapshot yields total = 0 and no rows", () => {
+  const view = panel(
+    { sessions: fakeSessions([{ id: "root" }]), agents: [agent("coder", "coder")] },
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+  assert.equal(view.mode, "builtin")
+  assert.equal(view.total, 0)
+  assert.equal(view.working, 0)
+  assert.deepEqual(view.rows, [])
+})
+
+test("an empty agent list locks built-in mode with no members", () => {
+  // Pinned shortcut: a transient empty list is cached as builtin mode.
+  const empty = memberSet([])
+  assert.deepEqual(empty, { mode: "builtin", roles: [] })
+
+  const general = agent("general", "general")
+  const running = child("g-1", "general", 1_000)
+  const view = panel(rootSources([running], [general], ["g-1"], {}, empty), "root", 35, BODY_MAX_LINES, 0)
+  assert.equal(view.mode, "builtin")
+  assert.equal(view.total, 0)
+  assert.equal(view.working, 0)
+  assert.deepEqual(view.rows, [])
+
+  // Built-in mode with a loaded builtin list does list its idle row.
+  const loaded = memberSet([general])
+  assert.deepEqual(loaded, { mode: "builtin", roles: [general] })
+  const idle = panel(rootSources([], [general], [], {}, loaded), undefined, 35, BODY_MAX_LINES, 0)
+  assert.equal(idle.total, 1)
+  assert.equal(idle.rows.length, 1)
+  assert.equal(idle.rows[0].head, blankRoleHead(1, "general"))
+})
+
+test("S12 the snapshot is frozen; the next activation re-decides", () => {
+  const snapshot = memberSet([agent("general", "general"), agent("coder", "coder")])
+  assert.equal(snapshot.mode, "charter")
+  assert.deepEqual(snapshot.roles.map((role) => role.id), ["coder"])
+
+  const live = [agent("general", "general"), agent("designer", "designer")]
+  const general = child("g-1", "general", 1_000)
+  const designer = child("d-1", "designer", 2_000)
+  const frozen = panel(
+    rootSources([general, designer], live, ["g-1", "d-1"], {}, snapshot),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+  assert.equal(frozen.mode, "charter")
+  assert.equal(frozen.total, 1)
+  assert.equal(frozen.working, 1)
+  assert.equal(frozen.rows[0].head, blankRoleHead(1, "general"))
+  assert.equal(frozen.rows[2].head, blankRoleHead(2, "coder"))
+  assert.equal(frozen.rows.some((row) => row.head.includes("designer")), false)
+
+  const next = memberSet(live)
+  assert.equal(next.mode, "charter")
+  assert.deepEqual(next.roles.map((role) => role.id), ["designer"])
+  assert.equal(next.roles.length, 1)
+})
+
+test("F28 an out-of-scope builtin instance cannot materialise a temporary row", () => {
+  const members = memberSet([agent("general", "general"), agent("coder", "coder")])
+  const elsewhere = child("g-1", "general", 1_000, { parentID: "other-root" })
+  const sources: Sources = {
+    sessions: fakeSessions([{ id: "root" }, { id: "other-root" }, elsewhere], ["g-1"]),
+    agents: [agent("general", "general"), agent("coder", "coder")],
+    models,
+    providers,
+    members,
+  }
+  const view = panel(sources, "root", 35, BODY_MAX_LINES, 0)
+  assert.equal(view.working, 0)
+  assert.equal(view.total, 1)
+  assert.equal(view.rows.length, 1)
+  assert.equal(view.rows[0].head, blankRoleHead(1, "coder"))
+})
+
+test("G20 the picker predicate still sees a running temporary builtin", () => {
+  const members = memberSet([agent("general", "general"), agent("coder", "coder")])
+  const general = child("g-1", "general", 1_000)
+  const sources = rootSources([general], [agent("general", "general"), agent("coder", "coder")], ["g-1"], {}, members)
+  assert.deepEqual(
+    collect(sources, "root").map((row) => row.sessionID),
+    ["g-1"],
+  )
 })

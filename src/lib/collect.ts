@@ -39,6 +39,44 @@ export function isVisibleRole(agent: AgentInfo): boolean {
   return !agent.hidden && agent.mode !== "primary"
 }
 
+/**
+ * C32: the host builtin ids (host v2.2.6 registry). Membership classifies an
+ * agent as builtin regardless of where its definition came from, so a project
+ * file that overrides a builtin cannot make it a charter member (F26, A.8).
+ */
+export const BUILTIN_AGENT_IDS: ReadonlyArray<string> = [
+  "build",
+  "compaction",
+  "explore",
+  "general",
+  "summary",
+  "title",
+]
+
+/** A.8 member-selection mode: charter definitions or the host builtins. */
+export type PanelMode = "charter" | "builtin"
+
+/** A.8 snapshot: the mode and the member roles it selected. */
+export type MemberSet = {
+  mode: PanelMode
+  /** Visible roles of the selected mode; this list is `M`. */
+  roles: AgentInfo[]
+}
+
+/**
+ * A.8: partitions the host list once per activation. `mode` looks at the
+ * unfiltered custom list, so a hidden or primary custom definition still
+ * selects charter mode while contributing no row. A builtin id is always
+ * builtin-classified, even when a project file overrides it (C32, F26).
+ */
+export function memberSet(agents: AgentInfo[]): MemberSet {
+  const custom = agents.filter((agent) => !BUILTIN_AGENT_IDS.includes(agent.id))
+  const builtin = agents.filter((agent) => BUILTIN_AGENT_IDS.includes(agent.id))
+  const mode: PanelMode = custom.length > 0 ? "charter" : "builtin"
+  const roles = (mode === "charter" ? custom : builtin).filter(isVisibleRole)
+  return { mode, roles }
+}
+
 export type SessionInfo = {
   id: string
   parentID?: string
@@ -62,6 +100,8 @@ export type Sources = {
   agents?: AgentInfo[]
   models?: ModelInfo[]
   providers?: ProviderInfo[]
+  /** A.8 snapshot. Absent means no members: `total = 0` and no rows. */
+  members?: MemberSet
 }
 
 export type RunningSubagent = {
@@ -501,8 +541,25 @@ export function panel(
   const shortLabel = labeler(sources.models, sources.providers, true)
   const roleLabel = (ref: ModelRef | undefined) => (ref ? shortLabel(ref) : "")
 
-  const roles = (sources.agents ?? []).filter(isVisibleRole)
-  const byID = new Map(roles.map((agent) => [agent.id, agent]))
+  const members = sources.members
+  // A missing snapshot is not a fresh decision: no members, no rows (A.8).
+  const mode: PanelMode = members?.mode ?? "builtin"
+  const memberRoles = members?.roles ?? []
+  const memberByID = new Map(memberRoles.map((agent) => [agent.id, agent]))
+  const liveAgents = sources.agents ?? []
+  const liveByID = new Map(liveAgents.map((agent) => [agent.id, agent]))
+
+  // A visible charter-mode builtin that is not a member becomes a temporary
+  // role only while it has an in-scope instance (R2, §2.1). The live entry is
+  // its definition (name, model, colour); R8 step 2 also reads the live list.
+  const roleFor = (agentID: string): AgentInfo | undefined => {
+    const member = memberByID.get(agentID)
+    if (member) return member
+    if (mode !== "charter" || !BUILTIN_AGENT_IDS.includes(agentID)) return undefined
+    const live = liveByID.get(agentID)
+    return live && isVisibleRole(live) ? live : undefined
+  }
+
   // No viewed tab means an empty instance set, never every tab (F11).
   const scope = sessionID ? sources.sessions.root(sessionID) : undefined
   const rootCache = new Map<string, string>()
@@ -519,7 +576,7 @@ export function panel(
     for (const session of sources.sessions.list()) {
       if (!session.parentID || !session.agent) continue
       if (rootOf(session.id) !== scope) continue
-      const agent = byID.get(session.agent)
+      const agent = roleFor(session.agent)
       if (!agent) continue
 
       const running = sources.sessions.status(session.id) === "running"
@@ -573,7 +630,7 @@ export function panel(
     })
   }
 
-  const idle = roles
+  const idle = memberRoles
     .filter((agent) => !sections.has(agent.id))
     .map((agent) => ({
       agentID: agent.id,
@@ -680,7 +737,8 @@ export function panel(
     more,
     working: busy.filter((section) => section.instances.some((one) => one.state === "active"))
       .length,
-    total: roles.length,
+    total: memberRoles.length,
+    mode,
   }
 }
 

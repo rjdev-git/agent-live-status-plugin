@@ -14,7 +14,11 @@ The sidebar renders a team panel whenever the host knows at least one
 subagent-capable agent. The panel never hides while that is true.
 
 - Title: `Project Team Members N/M` in the theme's base (white) colour.
-  `N` = roles with a working instance; `M` = roles known.
+  `N` = roles with a working instance (including a temporarily working
+  built-in under R2's charter-mode exception); `M` = roles known — in
+  charter mode the `.opencode/agents` definitions only, so `M` is stable for
+  the whole session even as temporary built-in rows appear and vanish; in
+  built-in mode the counted built-in agents.
 - Placement: `sidebar.content` by default; `sidebar.footer` and
   `prompt.footer` selectable.
 - Body: maximum 10 lines, excluding the title and the overflow line.
@@ -23,8 +27,24 @@ subagent-capable agent. The panel never hides while that is true.
 
 ## R2 — Role rows
 
-One row per subagent-capable agent: builtin agents plus project agent
-definitions, excluding agents marked `hidden` and primary agents.
+One row per subagent-capable agent of the panel's active member set. Member
+selection is human decision A.8:
+
+- The panel picks its mode once, as a snapshot at session start (or plugin
+  activation): **charter mode** when at least one agent definition file
+  exists in `.opencode/agents`, else **built-in mode**. Mid-session changes
+  to `.opencode/agents` do not flip the mode until the next session.
+- Built-in mode: rows are the host's built-in agents, excluding agents
+  marked `hidden` and primary agents. They show idle rows the same as any
+  role.
+- Charter mode: rows are the `.opencode/agents` definitions only. Built-in
+  agents get no idle row, even though their definitions exist in the host.
+- Charter-mode exception: while a task dispatched to a built-in agent has at
+  least one child session in flight, that built-in gets a temporary role row
+  under the R3/R4 lifecycle. When no session of it remains, the row
+  disappears entirely.
+
+Rows carry:
 
 - Row: two-digit number (` 1.`, `20.`), agent name (max 9 cells, clipped with
   `…`), the agent definition's model as the short `Provider/Model` label, an
@@ -45,7 +65,9 @@ currently viewed (other tabs' sessions are invisible here).
 - Colour: same rule as the working role row.
 - A succeeded instance disappears immediately: its row collapses back into
   the role row. A failed or interrupted instance does not — it follows
-  R4's grace window before the row collapses.
+  R4's grace window before the row collapses. For a temporary built-in row
+  (R2, charter-mode exception) the collapse of the last instance removes the
+  role row too.
 
 ## R4 — Failure grace window
 
@@ -58,6 +80,10 @@ row.
   the window and none is working.
 - Expiry is time-based: a one-second ticker runs only while a grace row is
   inside its window, and stops afterwards.
+- The window applies to every instance row, including instances of a
+  temporary built-in row (R2): a failed or interrupted built-in instance
+  keeps its row in warning colour for the same 30 seconds before the built-in
+  row disappears entirely.
 
 ## R5 — Layout arithmetic
 

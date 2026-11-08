@@ -20,12 +20,14 @@ import {
   elapsed,
   filterRows,
   isVisibleRole,
+  memberSet,
   modelRef,
   panel,
   matches,
   pickerTitle,
   speedTps,
   type AgentInfo,
+  type MemberSet,
   type PanelRow,
   type RunningSubagent,
   type Sources,
@@ -84,14 +86,33 @@ function readOptions(context: Context): Options {
 }
 
 /** Reads every data source once, against the location the TUI is showing. */
-function sources(context: Context): Sources {
+function sources(context: Context, members?: MemberSet): Sources {
   const location = context.location ?? context.data.location.default()
   return {
     sessions: context.data.session,
     agents: context.data.location.agent.list(location) ?? [],
     models: context.data.location.model.list(location) ?? [],
     providers: context.data.location.provider.list(location) ?? [],
+    members,
   }
+}
+
+/**
+ * A.8 snapshot: the mode and member roles are decided once per location, on the
+ * first render whose agent list is loaded, and then read as data forever. A
+ * later file change in `.opencode/agents` never moves the mode or `M` (F25).
+ */
+function memberSnapshot(context: Context, cache: Map<string, MemberSet>): MemberSet | undefined {
+  const location = context.location ?? context.data.location.default()
+  const cached = cache.get(location.directory)
+  if (cached) return cached
+  const list = context.data.location.agent.list(location)
+  if (!Array.isArray(list)) return undefined
+  // shortcut: a transient empty agent list would be cached as built-in mode for
+  // the whole activation; upgrade when the host exposes a loaded hint.
+  const snapshot = memberSet(list)
+  cache.set(location.directory, snapshot)
+  return snapshot
 }
 
 /** Sessions already asked of the host, so each one is synced once (G16). */
@@ -250,6 +271,7 @@ function Status(props: {
   bump: () => void
   compact: () => boolean
   width: () => number
+  members: () => MemberSet | undefined
   debug?: string
 }) {
   const [beat, setBeat] = createSignal(0)
@@ -262,12 +284,15 @@ function Status(props: {
     props.tick()
     beat()
     try {
-      const data = sources(props.context)
+      const data = sources(props.context, props.members())
       const view = panel(data, props.sessionID, props.width(), BODY_MAX_LINES)
       // Every running instance in scope: queue its sync so the bar fills once it lands (G16).
+      // The gate stays member-independent so a temporary builtin's bar fills (G20).
       const runningRows = props.sessionID ? collect(data, props.sessionID) : []
       if (props.debug) debugDump(data, props.sessionID, props.debug)
       for (const row of runningRows) void syncSession(props.context, row.sessionID, props.bump)
+      // Compact counts running subagents; the title counts roles with a working
+      // instance. Two fields, two derivations, never one shared value (R1).
       const running = runningRows.length
       lastFailure = undefined
       lastGood = { view, running }
@@ -415,6 +440,10 @@ export default Plugin.define({
     })
     const compact = () => options.compact ?? settings.compact
 
+    // A.8: one frozen member set per location directory, for this activation.
+    const memberSnapshots = new Map<string, MemberSet>()
+    const members = () => memberSnapshot(context, memberSnapshots)
+
     const [tick, setTick] = createSignal(0)
     const bump = () => setTick((value) => value + 1)
     const stops = WATCHED_EVENTS.map((type) => context.data.on(type, bump))
@@ -463,6 +492,7 @@ export default Plugin.define({
         bump={bump}
         compact={compact}
         width={() => options.width}
+        members={members}
         debug={options.debug}
       />
     ))
