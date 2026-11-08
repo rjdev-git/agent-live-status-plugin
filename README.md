@@ -14,38 +14,43 @@ It is especially useful when you use different models for your main agent and su
 
 ## Why use it
 
-- See live model information for each running subagent
+- The whole subagent team is visible all the time: working roles in colour, idle roles in grey
+- Working instances nest under their role like subfolders, each with its own model and context bar
 - Browse all active subagents from one searchable picker
 - Open any subagent session directly from the UI
 - Keep the status compact when you want less visual noise
 
 ## Example output
 
-One row per running subagent, oldest first, with a five-box context indicator:
+A tree of agent roles. A role shows the agent definition; every running instance nests under it with its session title, model, and context bar:
 
 ```text
-Sub Agents
+Project Team Members 1/5
  1.explore   Go/Kimi K3.1 Pro ▮▮▮▯▯
- 2.general   Go/MiniMax M3.1… ▮▯▯▯▯
- 3.code      Go/GPT-6 Luna    ▮▮▮▮▯
- 4.review    Go/Grok 4.7      ▮▮▯▯▯
+ ├ Inspect…  Go/Grok 4.7     ▮▮▮▮▯
+ └ Audit r…  Go/MiniMax M3.… ▮▯▯▯▯
+ 2.reviewer                  ▯▯▯▯▯
+ 3.qa                        ▯▯▯▯▯
+ 4.writer                    ▯▯▯▯▯
+ 5.researcher                ▯▯▯▯▯
 ```
 
-The `Sub Agents` title and the rows render only while at least one subagent is
-running; with none running the slot stays empty.
+States:
 
-Numbers are reserved for two digits, so `10.` lines up with ` 1.` and the rows
-never reflow. Past twenty rows they collapse into one overflow line:
+- Grey row = role waiting (idle), with empty muted boxes
+- Coloured role = at least one instance of that agent is working; the colour comes from the agent definition (`color`), falling back to the theme's success green
+- `├` / `└` rows = running instances, one per session, scoped to the tab you are viewing
+- A failed or interrupted instance keeps its row in warning colour for 30 seconds, then folds back into its role row
+
+The title counts roles currently working over roles known. The body caps at 10 lines; anything beyond folds into:
 
 ```text
-+1 more · /subagents
++2 more · /subagents
 ```
 
-The model label is capped at 20 cells (16 at the default `width: 35`), and clips
-with `…` past that. Boxes show how full the model context window is:
-`filled = round(pct × 5 / 100)`. The row text is green. Boxes are green below
-50%, yellow from 50%, red from 70%. A subagent with no usage data yet shows
-empty muted boxes.
+Role rows are numbered (` 1.`, `20.` reserved), instance rows are unnumbered. Both row shapes fill exactly `width` cells, so the bars align vertically.
+
+The model label clips when the row is too tight: the provider keeps at most half of the budget, and the model name takes the rest. Boxes show how full the model context window is: `filled = round(pct × 5 / 100)`. Bar boxes are green below 50%, yellow from 50%, red from 70%, independent of the row text colour. A role-without-instance row always shows empty boxes.
 
 Compact mode keeps the old summary:
 
@@ -55,8 +60,8 @@ sub 3
 
 ## Features
 
-- Live status summary in the session UI (`sidebar.content` by default)
-- Numbered per-subagent rows with a model and a context-window indicator
+- Live team tree in the session UI (`sidebar.content` by default)
+- Role rows with configured model, instance rows with live model and context
 - `/subagents` command and `/subagent-models` alias
 - Palette command: `Show running subagent models`
 - Palette command: `Toggle compact subagent status`
@@ -65,7 +70,11 @@ sub 3
 
 ## How it works
 
-The plugin inspects the active session family and shows child sessions that are currently marked as `running`.
+The panel lists every subagent-capable agent the host knows: builtin agents and the ones from `.opencode/agents/*.md`, skipping agents marked `hidden` and primary agents.
+
+A session becomes an instance row when it is a child session currently marked `running`, and it belongs to the tab the viewer is in. A session that ended with `outcome: failed` or `interrupted` stays visible for a 30-second grace window before collapsing back into its role row.
+
+The title counts how many roles have a working instance.
 
 It resolves the model in this order:
 
@@ -74,11 +83,13 @@ It resolves the model in this order:
 3. the nearest parent session model
 4. `unknown model`
 
+So an instance may show a model different from its role's `agent.md` — a per-session override wins.
+
 The displayed label follows the format `ProviderName/ModelName`, and appends ` (variant)` when relevant. If a label is missing, the plugin falls back to the provider or model ID.
 
 The sidebar rows use the short form: the provider's last word (`OpenCode Go` → `Go`) and no variant.
 
-The context indicator reads the newest message that reports token usage and divides its prompt size (`input + cache read`) by the model's context limit. Cumulative session tokens are not used: they never fall after compaction, so the bar would never recover.
+The context indicator reads the newest message that reports token usage and divides its prompt size (`input + cache read`) by the model's context limit. Cumulative session tokens are not used: they never fall after compaction, so the bar would never recover. A role row's box shows the fill of its busiest instance.
 
 ## Commands
 
@@ -174,8 +185,11 @@ npm test
 package.json             package metadata and exports
 src/index.ts             plugin bootstrap entry
 src/tui.tsx              TUI commands, slots, and dialogs
-src/lib/collect.ts       model resolution and summary logic
+src/lib/collect.ts       model resolution, role tree, and layout logic
 src/lib/collect.test.ts  unit tests for the data layer
+
+```text
+docs/superpowers/specs/  design documents
 ```
 
 ## License

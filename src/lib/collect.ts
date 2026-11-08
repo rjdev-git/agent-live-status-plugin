@@ -32,7 +32,13 @@ export type ProviderInfo = {
 
 export type AgentInfo = {
   id: string
+  name?: string
   model?: ModelRef
+  /** "subagent" | "primary" | "all"; undefined behaves like subagent. */
+  mode?: string
+  hidden?: boolean
+  /** Agent-definition colour token, used for the active row text. */
+  color?: string
 }
 
 export type SessionInfo = {
@@ -41,7 +47,8 @@ export type SessionInfo = {
   agent?: string
   model?: ModelRef
   title?: string
-  time?: { created?: number }
+  outcome?: "succeeded" | "failed" | "interrupted"
+  time?: { created?: number; updated?: number; idle?: number }
 }
 
 export type SessionSource = {
@@ -242,6 +249,9 @@ export const BAR_CELLS = 5
 /** Agent names are clipped to this many cells so the model column aligns. */
 export const AGENT_CELLS = 9
 
+/** Instance titles are clipped to this many cells. */
+export const INSTANCE_CELLS = 8
+
 /** Everything in a row except the model label: number, agent, spaces, boxes. */
 const ROW_FIXED_CELLS = 19
 
@@ -297,6 +307,211 @@ export function layout(rows: RunningSubagent[], width = 35, max = MAX_ROWS) {
     }),
     more: Math.max(0, ordered.length - shown.length),
   }
+}
+
+/** Grace window for a failed or interrupted instance row, in milliseconds. */
+export const GRACE_MS = 30_000
+
+export type RowState = "idle" | "active" | "grace"
+
+export type PanelRow = {
+  /**
+   * The full text before the boxes: role number and name or instance glyph
+   * and title, then the model field, then the gap.
+   */
+  head: string
+  /** Filled boxes, 0-5. Empty for an idle role row. */
+  filled: number
+  /** Context used, 0-100. Unknown when the session reports no usage. */
+  pct?: number
+  state: RowState
+  /** Agent-definition colour, applied while a row is not idle. */
+  agentColor?: string
+}
+
+type Section = {
+  agentID: string
+  name: string
+  color?: string
+  model: string
+  instances: Array<{ session: SessionInfo; state: "active" | "grace" }>
+}
+
+/**
+ * The whole sidebar as data: numbered role rows with tree-glyph instance rows
+ * nested under them. Running sessions and sessions inside the failure grace
+ * window become instances; every other agent is an idle role row. Body lines
+ * are capped at `maxLines`: roles with instances first (oldest instance
+ * first), then idle roles alphabetically, so an instance never separates from
+ * its role row. Instances are scoped to the tab the viewer is in.
+ */
+export function panel(
+  sources: Sources,
+  sessionID?: string,
+  width = 35,
+  maxLines = 10,
+  now = Date.now(),
+  graceMs = GRACE_MS,
+) {
+  const budget = Math.max(4, Math.min(MAX_MODEL_CELLS, width - ROW_FIXED_CELLS))
+  const shortLabel = labeler(sources.models, sources.providers, true)
+  const label = (ref: ModelRef | undefined) => (ref ? shortLabel(ref) : "")
+
+  const roles = (sources.agents ?? []).filter(
+    (agent) => !agent.hidden && agent.mode !== "primary",
+  )
+  const byID = new Map(roles.map((agent) => [agent.id, agent]))
+  const scope = sessionID ? sources.sessions.root(sessionID) : undefined
+  const rootCache = new Map<string, string>()
+  const rootOf = (id: string) => {
+    const cached = rootCache.get(id)
+    if (cached !== undefined) return cached
+    const value = sources.sessions.root(id)
+    rootCache.set(id, value)
+    return value
+  }
+
+  const sections = new Map<string, Section>()
+  for (const session of sources.sessions.list()) {
+    if (!session.parentID || !session.agent) continue
+    if (scope && rootOf(session.id) !== scope) continue
+    const agent = byID.get(session.agent)
+    if (!agent) continue
+
+    const running = sources.sessions.status(session.id) === "running"
+    const ended = session.time?.updated ?? session.time?.created
+    const stoppedBad = session.outcome === "failed" || session.outcome === "interrupted"
+    const inGrace = !running && stoppedBad && ended !== undefined && now - ended <= graceMs
+    const state: "active" | "grace" | undefined = running ? "active" : inGrace ? "grace" : undefined
+    if (!state) continue
+
+    let entry = sections.get(session.agent)
+    if (!entry) {
+      entry = {
+        agentID: session.agent,
+        name: agent.name ?? session.agent,
+        color: agent.color,
+        model: label(agent.model),
+        instances: [],
+      }
+      sections.set(session.agent, entry)
+    }
+    entry.instances.push({ session, state })
+  }
+
+  const active = [...sections.values()].filter((entry) =>
+    entry.instances.some((one) => one.state === "active"),
+  )
+  const grace = [...sections.values()].filter((entry) =>
+    entry.instances.every((one) => one.state === "grace"),
+  )
+  const idle = roles
+    .filter((agent) => !sections.has(agent.id))
+    .map((agent) => ({
+      agentID: agent.id,
+      name: agent.name ?? agent.id,
+      color: agent.color,
+      model: label(agent.model),
+      instances: [],
+    }))
+  idle.sort((left, right) => left.name.toLowerCase().localeCompare(right.name.toLowerCase()))
+  active.sort((left, right) =>
+    Math.min(...left.instances.map((one) => one.session.time?.created ?? Infinity)) -
+    Math.min(...right.instances.map((one) => one.session.time?.created ?? Infinity)),
+  )
+
+  const rows: PanelRow[] = []
+  let more = 0
+  let number = 0
+
+  const roleLine = (
+    agentName: string,
+    model: string,
+    state: RowState,
+    color?: string,
+    filled = 0,
+  ) => {
+    number += 1
+    rows.push({
+      head: roleHead(number, agentName, model, budget),
+      filled,
+      state,
+      agentColor: color,
+    })
+  }
+  const instanceLine = (glyph: "├" | "└", instance: Section["instances"][number], color?: string) => {
+    const title = truncate(cleanTitle(instance.session.title ?? instance.session.id), INSTANCE_CELLS)
+    const model = fitModel(shortLabelOf(instance.session, sources, label), INSTANCE_CELLS)
+    rows.push({
+      head: ` ${glyph} ${title.padEnd(INSTANCE_CELLS)} ${model.padEnd(budget + 1)} `,
+      filled: fillFor(instance.session, sources),
+      pct: contextPct(instance.session, sources),
+      state: instance.state,
+      agentColor: color,
+    })
+  }
+
+  for (const entry of active) {
+    const lines = entry.instances.length + 1
+    if (rows.length + lines > maxLines) {
+      more += lines
+      continue
+    }
+    const busiest = Math.max(...entry.instances.map((one) => fillFor(one.session, sources)))
+    roleLine(entry.name, entry.model, "active", entry.color, busiest)
+    entry.instances.forEach((one, index) => {
+      instanceLine(index === entry.instances.length - 1 ? "└" : "├", one, entry.color)
+    })
+  }
+  for (const entry of grace) {
+    if (rows.length + entry.instances.length + 1 > maxLines) {
+      more += entry.instances.length + 1
+      continue
+    }
+    roleLine(entry.name, entry.model, "grace", undefined)
+    entry.instances.forEach((one, index) => {
+      instanceLine(index === entry.instances.length - 1 ? "└" : "├", one, entry.color)
+    })
+  }
+  for (const entry of idle) {
+    if (rows.length >= maxLines) {
+      more += 1
+      continue
+    }
+    roleLine(entry.name, entry.model, "idle", entry.color)
+  }
+
+  return {
+    rows,
+    more,
+    working: active.length,
+    total: roles.length,
+  }
+}
+
+/** Short model label for an instance, falling back through the agent model. */
+function shortLabelOf(
+  session: SessionInfo,
+  sources: Sources,
+  label: (ref: ModelRef | undefined) => string,
+): string {
+  const ref = modelRef(session, sources) ?? sources.agents?.find((a) => a.id === session.agent)?.model
+  return ref ? label(ref) : ""
+}
+
+/** Context boxes filled by the newest message usage, 0-5. */
+function fillFor(session: SessionInfo, sources: Sources): number {
+  const pct = contextPct(session, sources)
+  if (pct === undefined) return 0
+  return Math.min(BAR_CELLS, Math.max(0, Math.round((pct * BAR_CELLS) / 100)))
+}
+
+/** Role row text: number, agent name, model field, and the gap before boxes. */
+function roleHead(index: number, name: string, model: string, budget: number): string {
+  const number = String(index).padStart(2)
+  const agent = truncate(name, AGENT_CELLS).padEnd(AGENT_CELLS)
+  const modelField = model ? fitModel(model, budget).padEnd(budget) : " ".repeat(budget)
+  return `${number}.${agent} ${modelField} `
 }
 
 export function elapsed(since: number | undefined, now = Date.now()): string {

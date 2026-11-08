@@ -8,6 +8,7 @@ import {
   fitModel,
   filterRows,
   labeler,
+  panel,
   layout,
   matches,
   resolveModel,
@@ -292,8 +293,91 @@ test("cleanTitle collapses whitespace", () => {
   assert.equal(cleanTitle("  a\n\nb\t c "), "a b c")
 })
 
-test("filterRows matches agent, model, and title case-insensitively", () => {
-  const rows = [
+test("panel lists roles, nests working instances, and hides expired failures", () => {
+  const agents = [
+    { id: "zz", name: "Zeta", mode: "subagent" },
+    { id: "aa", name: "Alpha", mode: "subagent", color: "#00ff00", model: { id: "deepseek-flash", providerID: "deepseek" } },
+    { id: "hidden", name: "Hidden", mode: "subagent", hidden: true },
+    { id: "primary", name: "Lead", mode: "primary" },
+  ]
+  const NOW = 1_000_000
+  const sources: Sources = {
+    sessions: fakeSessions(
+      [
+        { id: "root", parentID: undefined },
+        {
+          id: "work",
+          parentID: "root",
+          agent: "aa",
+          title: "Doing work",
+          model: { id: "deepseek-flash", providerID: "deepseek" },
+          time: { created: NOW - 12_000, updated: NOW - 1_000 },
+        },
+        {
+          id: "failed-a",
+          parentID: "root",
+          agent: "zz",
+          title: "Broke",
+          outcome: "failed",
+          time: { created: NOW - 20_000, updated: NOW - 15_000 },
+        },
+        {
+          id: "failed-old",
+          parentID: "root",
+          agent: "zz",
+          title: "Old failure",
+          outcome: "failed",
+          time: { created: NOW - 120_000, updated: NOW - 60_000 },
+        },
+      ],
+      ["work"],
+    ),
+    agents,
+    models,
+    providers,
+  }
+
+  const view = panel(sources, "root", 35, 10, NOW)
+  assert.equal(view.working, 1)
+  assert.equal(view.total, 2)
+  assert.deepEqual(
+    view.rows.map((row) => [row.state, row.agentColor]),
+    [
+      ["active", "#00ff00"],
+      ["active", "#00ff00"],
+      ["grace", undefined],
+      ["grace", undefined],
+    ],
+  )
+  assert.match(view.rows[0].head, /^ 1\.Alpha/)
+  assert.match(view.rows[1].head, /^ └ Doing w/)
+  assert.match(view.rows[2].head, /^ 2\.Zeta /)
+  assert.equal(view.rows[0].filled, 0)
+  for (const row of view.rows) assert.equal(row.head.length + 5, 35)
+  assert.equal(view.rows[1].head.length + 5, 35)
+})
+
+test("panel caps the body and folds nothing under an incomplete role", () => {
+  const agents = Array.from({ length: 12 }, (_, index) => ({
+    id: `agent${index}`,
+    name: `Agent${index}`,
+    mode: "subagent" as const,
+  }))
+  const sources: Sources = { sessions: fakeSessions([]), agents }
+  const view = panel(sources, undefined, 35, 10, 0)
+  assert.equal(view.rows.length, 10)
+  assert.equal(view.more, 2)
+  assert.equal(view.rows[0].head, " 1.Agent0                     ")
+})
+
+test("panel falls back to the agent or session model for the role row", () => {
+  const agents = [{ id: "alpha", name: "Alpha", mode: "subagent", model: { id: "deepseek-flash", providerID: "deepseek" } }]
+  const sources: Sources = { sessions: fakeSessions([]), agents, models, providers }
+  const view = panel(sources, undefined, 35, 10, 0)
+  assert.match(view.rows[0].head, /DeepSe/)
+})
+
+test("filterRows matches agent, model, and title case-insensitively", () => {  const rows = [
     { sessionID: "ses_1", agent: "explore", model: "DeepSeek/Flash", title: "Inspect repo" },
     { sessionID: "ses_2", agent: "general", model: "OpenAI/GPT", title: "Write tests" },
   ]

@@ -1,20 +1,25 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
 import type { ResolvedTheme } from "@opencode/theme/tui"
+import { parseColor, type RGBA } from "@opentui/core"
 import type { JSX } from "@opentui/solid"
-import { For, Show, createMemo, createSignal } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import {
   BAR_CELLS,
-  MAX_ROWS,
+  GRACE_MS,
   collect,
   elapsed,
   filterRows,
-  layout,
+  panel,
   matches,
   truncate,
+  type PanelRow,
   type RunningSubagent,
   type Sources,
 } from "./lib/collect"
+
+const FILL = "▮"
+const EMPTY = "▯"
 
 const WATCHED_EVENTS = [
   "session.created",
@@ -78,8 +83,16 @@ function barColor(theme: ResolvedTheme, pct: number | undefined) {
   return theme.text.feedback.success.base
 }
 
+/** Row text colour: grey idle, warning in the failure grace, else agent colour. */
+function rowColor(theme: ResolvedTheme, row: PanelRow): RGBA | string {
+  if (row.state === "idle") return theme.text.muted
+  if (row.state === "grace") return theme.text.feedback.warning.base
+  if (row.agentColor) return parseColor(row.agentColor)
+  return theme.text.feedback.success.base
+}
+
 /** Inline coloured text inside a single `<text>` block. */
-function Seg(props: { fg: ReturnType<typeof barColor>; children: string }) {
+function Seg(props: { fg: RGBA | string; children: string }) {
   return <span style={{ fg: props.fg } as never}>{props.children}</span>
 }
 
@@ -90,43 +103,54 @@ function Status(props: {
   compact: () => boolean
   width: () => number
 }) {
+  const [beat, setBeat] = createSignal(0)
+
   const rows = createMemo(() => {
     props.tick()
     return collect(sources(props.context), props.sessionID)
   })
 
-  const view = createMemo(() => layout(rows(), props.width(), MAX_ROWS))
+  const view = createMemo(() => {
+    props.tick()
+    beat()
+    return panel(sources(props.context), props.sessionID, props.width(), 10)
+  })
+
+  // A failed row expires on a clock, not on an event: tick once per second
+  // for as long as any row sits inside the 30s grace window.
+  createEffect(() => {
+    if (!view().rows.some((row) => row.state === "grace")) return
+    const timer = setInterval(() => setBeat((value) => value + 1), 1000)
+    onCleanup(() => clearInterval(timer))
+  })
+
+  const theme = props.context.theme
 
   return (
-    <Show when={rows().length > 0}>
+    <Show when={view().total > 0}>
       <Show
         when={!props.compact()}
         fallback={
-          <text fg={props.context.theme.text.feedback.success.base}>{`sub ${rows().length}`}</text>
+          <text fg={theme.text.feedback.success.base}>{`sub ${rows().length}`}</text>
         }
       >
         <text wrapMode="none">
-          <span style={{ fg: props.context.theme.text.base } as never}>Sub Agents</span>
-          <br />
+          <span style={{ fg: theme.text.base } as never}>
+            {`Project Team Members ${view().working}/${view().total}`}
+          </span>
           <For each={view().rows}>
             {(row, index) => (
               <>
-                <Show when={index() > 0}>
-                  <br />
-                </Show>
-                <Seg fg={props.context.theme.text.feedback.success.base}>{row.head}</Seg>
-                <Seg fg={barColor(props.context.theme, row.pct)}>
-                  {"▮".repeat(row.filled)}
-                </Seg>
-                <Seg fg={props.context.theme.text.muted}>
-                  {"▯".repeat(BAR_CELLS - row.filled)}
-                </Seg>
+                <br />
+                <Seg fg={rowColor(theme, row)}>{row.head}</Seg>
+                <Seg fg={barColor(theme, row.pct)}>{FILL.repeat(row.filled)}</Seg>
+                <Seg fg={theme.text.muted}>{EMPTY.repeat(BAR_CELLS - row.filled)}</Seg>
               </>
             )}
           </For>
           <Show when={view().more > 0}>
             <br />
-            <span style={{ fg: props.context.theme.text.muted } as never}>{`+${view().more} more · /subagents`}</span>
+            <span style={{ fg: theme.text.muted } as never}>{`+${view().more} more · /subagents`}</span>
           </Show>
         </text>
       </Show>
