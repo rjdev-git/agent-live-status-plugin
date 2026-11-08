@@ -301,6 +301,21 @@ export const ROLE_MODEL_MAX_CELLS = 20
 /** Every role row cell except the model column: number, name, gap, separator, boxes. */
 export const ROLE_FIXED_CELLS = 19
 
+/** C38: role cells outside the proportional split (number, gap, separator, boxes). */
+export const ROLE_REST_FIXED_CELLS = 10
+
+/** C40: the role name's share of the proportional rest, rounded half-up. */
+export const ROLE_NAME_SHARE_NUM = 2
+
+/** C40: the role name's share denominator. */
+export const ROLE_NAME_SHARE_DEN = 5
+
+/** C42: lower bound of the proportional role name field. */
+export const ROLE_NAME_MIN_CELLS = 6
+
+/** C43: lower bound of the proportional role model field. */
+export const ROLE_MODEL_MIN_CELLS = 4
+
 /** One separator cell between the role model field and the first box glyph. */
 export const ROLE_BAR_GAP_CELLS = 1
 
@@ -319,8 +334,26 @@ export const INSTANCE_MODEL_CELLS = 12
 /** Every instance row cell except the model column: indent, title, gap, separator, boxes. */
 export const INSTANCE_FIXED_CELLS = 18
 
+/** C39: instance cells outside the proportional split (indent, gap, separator, boxes). */
+export const INSTANCE_REST_FIXED_CELLS = 10
+
+/** C41: the instance title's share of the proportional rest, rounded half-up. */
+export const INSTANCE_TITLE_SHARE_NUM = 2
+
+/** C41: the instance title's share denominator. */
+export const INSTANCE_TITLE_SHARE_DEN = 5
+
+/** C44: lower bound of the proportional instance title field. */
+export const INSTANCE_TITLE_MIN_CELLS = 6
+
+/** C45: lower bound of the proportional instance model field. */
+export const INSTANCE_MODEL_MIN_CELLS = 4
+
 /** One separator cell between the instance model field and the first box glyph. */
 export const INSTANCE_BAR_GAP_CELLS = 1
+
+/** C37: CSS pixels per cell used by width detection when `cellPx` is absent. */
+export const CELL_PX = 8
 
 /** Lower fill clamp: an unknown or negative speed fills no box. */
 export const FILL_MIN_BOXES = 0
@@ -449,18 +482,105 @@ function effectiveWidth(width: number): number {
   return Math.max(MIN_ROW_CELLS, width)
 }
 
-function roleColumn(width: number): number {
-  return effectiveWidth(width) - ROLE_FIXED_CELLS
+/** C46: the `cellPx` option's value, defaulting when it is not finite and positive. */
+export function resolveCellPx(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : CELL_PX
 }
 
-function instanceColumn(width: number): number {
-  return effectiveWidth(width) - INSTANCE_FIXED_CELLS
+/** Non-negative half-up rounding: `floor(x + 1/2)` (C40, C41, C46). */
+function roundHalfUp(value: number): number {
+  return Math.floor(value + 0.5)
+}
+
+/** A proportional share evaluated in integers, so no float error enters a split. */
+function shareOf(rest: number, num: number, den: number): number {
+  return Math.floor((2 * rest * num + den) / (2 * den))
+}
+
+/** §1.4: the TUI's probe of the host sidebar accessors, as plain data. */
+export type WidthProbe = {
+  placement: "side" | "mobile"
+  visible: boolean
+  opened: boolean
+  loaded: boolean
+  cssWidth: number
+}
+
+/**
+ * C46: the detected cell count, or `undefined` when detection is unavailable:
+ * no probe, a non-side placement, a hidden/closed/unloaded sidebar, or a
+ * non-finite/non-positive CSS width.
+ */
+export function detectedCells(
+  probe: WidthProbe | undefined,
+  cellPx: number,
+): number | undefined {
+  if (!probe) return undefined
+  if (probe.placement !== "side") return undefined
+  if (!probe.visible || !probe.opened || !probe.loaded) return undefined
+  if (!Number.isFinite(probe.cssWidth) || probe.cssWidth <= 0) return undefined
+  return roundHalfUp(probe.cssWidth / resolveCellPx(cellPx))
+}
+
+/**
+ * C47: `W` is the detected cell count capped by the declared width and floored
+ * at `MIN_ROW_CELLS`; an unavailable detection leaves the declared width.
+ */
+export function rowWidth(
+  declaredWidth: number,
+  cellPx: number,
+  probe?: WidthProbe,
+): { W: number; dynamic: boolean } {
+  const declared = effectiveWidth(declaredWidth)
+  const detected = detectedCells(probe, cellPx)
+  if (detected === undefined) return { W: declared, dynamic: false }
+  return { W: effectiveWidth(Math.min(declared, detected)), dynamic: true }
+}
+
+/** One row shape's field sizes: the leading field and the model field. */
+export type FieldSplit = {
+  /** Name field (role) or title field (instance). */
+  leading: number
+  /** Model field. */
+  model: number
+  /** True when the proportional split applies; false is the pre-A.11 arithmetic. */
+  proportional: boolean
+}
+
+/** C48: the role name/model split, or the fallback `9 / (W − 19)` fields. */
+export function roleSplit(width: number, dynamic: boolean): FieldSplit {
+  const W = effectiveWidth(width)
+  const rest = W - ROLE_REST_FIXED_CELLS
+  const name = shareOf(rest, ROLE_NAME_SHARE_NUM, ROLE_NAME_SHARE_DEN)
+  const model = rest - name
+  if (dynamic && name >= ROLE_NAME_MIN_CELLS && model >= ROLE_MODEL_MIN_CELLS) {
+    return { leading: name, model, proportional: true }
+  }
+  return { leading: ROLE_NAME_CELLS, model: W - ROLE_FIXED_CELLS, proportional: false }
+}
+
+/**
+ * C49: the instance title/model split. The title share is capped at
+ * `INSTANCE_TITLE_CELLS`, and the unused title cells flow into the model field.
+ */
+export function instanceSplit(width: number, dynamic: boolean): FieldSplit {
+  const W = effectiveWidth(width)
+  const rest = W - INSTANCE_REST_FIXED_CELLS
+  const title = Math.min(
+    shareOf(rest, INSTANCE_TITLE_SHARE_NUM, INSTANCE_TITLE_SHARE_DEN),
+    INSTANCE_TITLE_CELLS,
+  )
+  const model = rest - title
+  if (dynamic && title >= INSTANCE_TITLE_MIN_CELLS && model >= INSTANCE_MODEL_MIN_CELLS) {
+    return { leading: title, model, proportional: true }
+  }
+  return { leading: INSTANCE_TITLE_CELLS, model: W - INSTANCE_FIXED_CELLS, proportional: false }
 }
 
 /**
  * Role row text: number, agent name, and the model column. A built-in role
  * puts `BUILTIN_TAG_TEXT` in the model column instead of reading a model
- * (A.9, C34).
+ * (A.9, C34, C50). A bound floor or no detection selects the fixed arithmetic.
  */
 function roleHead(
   index: number,
@@ -468,15 +588,16 @@ function roleHead(
   model: string,
   width: number,
   builtin: boolean,
+  dynamic: boolean,
 ): string {
-  const column = roleColumn(width)
+  const fields = roleSplit(width, dynamic)
   const number = String(index).padStart(ROLE_NUMBER_DIGITS)
-  const agent = padCells(clip(name, ROLE_NAME_CELLS), ROLE_NAME_CELLS)
+  const agent = padCells(clip(name, fields.leading), fields.leading)
   const modelField = builtin
-    ? padCells(clip(BUILTIN_TAG_TEXT, column), column)
+    ? padCells(clip(BUILTIN_TAG_TEXT, fields.model), fields.model)
     : model
-      ? padCells(fitModel(model, Math.min(column, ROLE_MODEL_MAX_CELLS)), column)
-      : " ".repeat(column)
+      ? padCells(fitModel(model, Math.min(fields.model, ROLE_MODEL_MAX_CELLS)), fields.model)
+      : " ".repeat(fields.model)
   return `${number}.${agent}${" ".repeat(ROLE_NAME_GAP_CELLS)}${modelField}${" ".repeat(ROLE_BAR_GAP_CELLS)}`
 }
 
@@ -490,13 +611,14 @@ function instanceHead(
   title: string,
   model: string | undefined,
   width: number,
+  dynamic: boolean,
 ): string {
-  const column = instanceColumn(width)
-  const shownTitle = padCells(clip(cleanTitle(title), INSTANCE_TITLE_CELLS), INSTANCE_TITLE_CELLS)
+  const fields = instanceSplit(width, dynamic)
+  const shownTitle = padCells(clip(cleanTitle(title), fields.leading), fields.leading)
   const modelField =
     model === undefined
-      ? " ".repeat(column)
-      : padCells(fitModel(model, Math.min(column, INSTANCE_MODEL_CELLS)), column)
+      ? " ".repeat(fields.model)
+      : padCells(fitModel(model, Math.min(fields.model, INSTANCE_MODEL_CELLS)), fields.model)
   return ` ${glyph} ${shownTitle}${" ".repeat(INSTANCE_TITLE_GAP_CELLS)}${modelField}${" ".repeat(INSTANCE_BAR_GAP_CELLS)}`
 }
 
@@ -582,6 +704,7 @@ export function panel(
   maxLines = BODY_MAX_LINES,
   now = Date.now(),
   graceMs = GRACE_MS,
+  dynamic = false,
 ) {
   const W = effectiveWidth(width)
   const shortLabel = labeler(sources.models, sources.providers, true)
@@ -712,7 +835,7 @@ export function panel(
     // A built-in role never reads its definition model (A.9, C34).
     const modelText = builtin ? "" : model ? shortLabel(model) : ""
     rows.push({
-      head: roleHead(number, agentName, modelText, W, builtin),
+      head: roleHead(number, agentName, modelText, W, builtin, dynamic),
       filled: barFill(tps),
       tps,
       state,
@@ -733,6 +856,7 @@ export function panel(
         instance.session.title ?? instance.session.id,
         instanceLabel(instance.session, sources, roleRef, shortLabel),
         W,
+        dynamic,
       ),
       filled: barFill(tps),
       tps,

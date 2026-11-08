@@ -51,9 +51,12 @@ selection is human decision A.8:
 
 Rows carry:
 
-- Row: two-digit number (` 1.`, `20.`), agent name (max 9 cells, clipped with
-  `…`), the agent definition's model as the short `Provider/Model` label, an
-  agent with no defined model shows blank model cells.
+- Row: two-digit number (` 1.`, `20.`), agent name (on the A.11 dynamic
+  path the name uses the full proportional name field and clips with `…`
+  only when the string exceeds that field; on the fallback path it stays
+  capped at 9 cells, clipped with `…`), the agent definition's model as the
+  short `Provider/Model` label, an agent with no defined model shows blank
+  model cells.
 - Idle state: grey (`theme.text.muted`), empty boxes.
 - Working state: the colour defined on the agent definition, falling back to
   the theme's success green.

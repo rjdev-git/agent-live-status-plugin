@@ -59,7 +59,10 @@ testable from plain data.
   }
   ```
 
-  `head` is the whole row except the bar and is exactly `width - 5` cells.
+  `head` is the whole row except the bar and is exactly `W - 5` cells, where
+  `W` is the effective row width of §1.4 (the configured width, or the
+  detected-and-capped width, A.11). Both layout paths keep that length, so
+  nothing downstream of the head learns which path produced it.
   A role head is number, name, and either the model label or, for a built-in
   role, the tag (`BUILTIN_TAG_TEXT`); an instance head is indent, title, and
   the model label when A.10 shows it (the model-column cells stay in place as
@@ -133,22 +136,28 @@ included).
   resolution). A member row of a non-builtin agent keeps the existing model
   rule unchanged. An instance row of a built-in keeps its model label (shown
   per A.10) and never carries the tag (§5, A.9).
-- Row: two-digit number (` 1.`, `20.`), agent name (max 9 cells, clipped with
-  `…`), the agent definition's model as the short `Provider/Model` label, an
-  agent with no defined model shows blank model cells. A built-in role row
-  shows the tag in that slot instead (A.9).
+- Row: two-digit number (` 1.`, `20.`), agent name (dynamic path: the full
+  proportional name field, clipped with `…` only beyond it; fallback path:
+  max 9 cells, clipped with `…`), the agent definition's model as the short
+  `Provider/Model` label, an agent with no defined model shows blank model
+  cells. A built-in role row shows the tag in that slot instead (A.9).
 - Idle state: grey (`theme.text.muted`), empty boxes. Only member rows can be
   idle; a temporary role is never idle.
 - Working state: the colour defined on the agent definition, falling back to
   the theme's success green. A temporary row uses exactly this rule.
 
-Role display name is `agent.name ?? agent.id`, clipped to 9 cells and padded
-to 9. A role row's model column is blank (spaces) when
+Role display name is `agent.name ?? agent.id`. On the fallback path it is
+clipped to 9 cells and padded to 9; on the dynamic path (A.11, §1.1) the name
+uses the **full** derived name field `N` (C48), clips with `…` only beyond
+that field, and is padded to `N` — there is no 9-cell cap on that path (R2 as
+amended, F31 settled). A role
+row's model column is blank (spaces) when
 `agent.model` is undefined; otherwise the label is the short label (R8) of
 `agent.model`, clipped by the R5 split rule. For a built-in role the column
 holds the tag instead and `agent.model` is never read for that row (C34);
-the name clip is confined to `ROLE_NAME_CELLS` and cannot consume the tag
-slot (C5, A.9). `view.total` counts the member
+the name clip is confined to the derived name field (`ROLE_NAME_CELLS` on the
+fallback path, `N` on the dynamic path) and cannot consume the tag
+slot (C5, C48, A.9). `view.total` counts the member
 rows only, including rows folded by overflow; temporary rows never enter it.
 Member `AgentInfo` values come from the snapshot, so a mid-session definition
 change cannot move a member row; temporary rows read the live builtin
@@ -194,10 +203,12 @@ Rules:
   instance; an out-of-scope instance cannot materialise it (otherwise the
   row would be an idle builtin row, which R2 forbids).
 - Title = `cleanTitle(session.title ?? session.id)` (whitespace collapsed to
-  single spaces, trimmed), clipped to 8 cells, padded to 8.
+  single spaces, trimmed), clipped to the title field `T` (§1.2, A.11),
+  padded to `T`. On the fallback path `T = 8` cells (`INSTANCE_TITLE_CELLS`).
 - Instance model = R8 resolution for that session, rendered as the short
-  label, clipped to 12 cells by the R5 split rule, then padded to the model
-  column; one separator cell follows the column before the boxes. A.10
+  label, clipped by the R5 split rule to the model text cap
+  `min(M, INSTANCE_MODEL_CELLS)`, then padded to the model field `M` (A.11,
+  §1.2); one separator cell follows the field before the boxes. A.10
   suppresses the label when it equals the role baseline label (C35); the
   padding and the separator are unchanged when it is suppressed (C36).
 - Comparison operands (A.10). Instance side: R8's own-session model → agent
@@ -214,9 +225,9 @@ Rules:
   (session model selected, ancestor appears, live definition changes), so a
   row can gain or lose the model cell between passes with no grace, state, or
   timer side effect.
-- The instance model text cap stays 12 cells whether the label is shown or
-  not; suppression removes text, never width, and the title keeps its 8-cell
-  field (§1.2, C11, C36).
+- The instance model text cap stays `min(M, INSTANCE_MODEL_CELLS)` whether the
+  label is shown or not; suppression removes text, never width, and the title
+  keeps its field `T` (§1.2, C11, C36).
 - "Finished" means status is no longer `running`. A succeeded session has no
   row at any age. Failed and interrupted sessions are the R4 exception and
   keep a row only inside the window.
@@ -265,39 +276,65 @@ Design decisions:
 
 ## R5 — Layout arithmetic
 
-Both row shapes are exactly `width` cells wide; the boxes always occupy the
+Both row shapes are exactly `W` cells wide; the boxes always occupy the
 last 5 columns, aligned across rows. Column `W − 5` of both shapes is the
 separator cell, so `head` is `W − 5` cells and ends with that space.
 
 - `width` option, default 35 cells.
+- Dynamic width (A.11, §1.4): the row width is derived at render time from
+  the host's reactive `PanelFrame.sidebar.width()` in CSS pixels divided by
+  the `cellPx` option (default 8, C37) and rounded half-up. The configured
+  `width` is the **fallback** when detection is unavailable and the **cap**
+  when it succeeds; the floor `MIN_ROW_CELLS = 19` applies in both paths.
+  Detection is unavailable when the panel is not in the side region, the
+  region is not visible or the sidebar is closed, the stored width has not
+  loaded (`transition() === false`), or the reported width is not a finite
+  positive number.
+- Proportional fields (A.11): the "rest" is the row minus number 3 (role) or
+  indent 3 (instance), the gap 1, the separator 1 and the boxes 5 — `W − 10`
+  on both shapes. On a role row `rest` splits into the name field
+  `N = roundHalfUp(rest × 2/5)` and the model field `rest − N`. On an
+  instance row it splits the same way, but the title field is
+  `T = min(roundHalfUp(rest × 2/5), 8)` and the unused cells go to the model
+  field `rest − T`. Floors: name/title 6, model field 4. When a floor binds,
+  or detection is unavailable, the pre-A.11 fixed arithmetic below governs
+  exactly.
+- Fixed under A.11: the two-digit number 3, the indent 3, both separator
+  cells 1 each, the 5 boxes, and the `[built-in]` tag, which keeps its
+  10-cell render **inside** whatever role model field the split yields and is
+  never proportional.
 - Model label rule: when `Provider/Model` overflows its field, the provider
   keeps at most half of it, and the model name gets whatever remains; the
   whole label clips to `field - 1` characters plus `…`.
-- Role field: number 3 + name 9 + space 1 + model (width - 19, capped at 20)
+- **Fallback path (the pre-A.11 arithmetic, still the fixture baseline):**
+  role field: number 3 + name 9 + space 1 + model (width - 19, capped at 20)
   + separator 1 + boxes 5. At the default width the model field is 16 cells.
   A built-in role row puts `BUILTIN_TAG_TEXT` in that same model slot, clipped
-  to the column (C33, C34): the arithmetic above is unchanged, so no total
-  width, instance column, or member column moves (A.9).
-- Instance field: indent 3 (space, glyph, space) + title 8 + space 1 + model
-  12 + padding to align + separator 1 + boxes 5. A.10's omitted model cell
-  keeps this arithmetic: the label text becomes 0 cells (all padding), the
-  title field stays 8 and the column stays `width - 18`, so the separator and
-  the boxes do not move (§1.2, C36).
+  to the field (C33, C34, C50): the arithmetic is unchanged, so no total
+  width, instance field, or member column moves (A.9).
+- Instance field (fallback path): indent 3 (space, glyph, space) + title 8 +
+  space 1 + model 12 + padding to align + separator 1 + boxes 5. A.10's
+  omitted model cell keeps this arithmetic: the label text becomes 0 cells
+  (all padding), the title field stays 8 and the model field stays
+  `width - 18`, so the separator and the boxes do not move (§1.2, C36).
 - Exactly one separator cell sits between the model field and the boxes on
   both row shapes (`ROLE_BAR_GAP_CELLS`, `INSTANCE_BAR_GAP_CELLS`, A.5).
-  Between the box glyphs there is no gap (R6). The separator is why the role
-  column is `width - 19` and the instance column `width - 18`.
+  Between the box glyphs there is no gap (R6). The separator is why the
+  fallback role column is `width - 19` and the fallback instance column
+  `width - 18`.
 - `One constant, one meaning`: each field has its own named constant; one
   constant never serves a second field.
 
-The cell-by-cell arithmetic is §1. The cap in "capped at 20" is applied to
-the model **label text**; the model **column** stays `width - 19` so the row
-is exactly `width` cells for widths above 39 as well (F1). When A.10 shows it,
-the instance model **text** is 12 cells at every width where the column allows
-it; above 35 the extra column cells become padding (F21). Below 30 cells the
-instance model text shrinks below 12 to keep the row exactly `width` (F1). A
-suppressed instance label occupies 0 text cells and the whole column is
-padding (C36).
+The cell-by-cell arithmetic is §1; the width derivation is §1.4. The cap in
+"capped at 20" is applied to the model **label text**; the role model
+**field** is `width - 19` on the fallback path and the split field `M` on the
+proportional path, so the row is exactly `W` cells in both. When A.10 shows
+it, the instance model **text** is `min(M, 12)` cells; the extra field cells
+become padding (F21). A suppressed instance label occupies 0 text cells and
+the whole field is padding (C36). The two paths can disagree at the same `W`
+(the fallback role row at 35 is `" 1.explore   Go/Kimi K3.1 Pro "`, the
+proportional one `" 1.explore    Go/Kimi K3.1 P… "`); that is A.11's
+fallback/cap rule, recorded as F32.
 
 ## R6 — Speed bar
 
@@ -553,8 +590,10 @@ of R2/R4/R6 are testable without the SDK.
 
 ## 1. Panel layout arithmetic
 
-All positions are 1-based columns. `W` is the effective width; `W >= 19`
-(F1). At `W` below 19 the configured width is raised to 19 before layout.
+All positions are 1-based columns. `W` is the effective row width from §1.4:
+on the fallback path the configured `width` raised to `MIN_ROW_CELLS`; on the
+proportional path (A.11) the detected cell count, capped by the configured
+`width` and floored at `MIN_ROW_CELLS`. `W >= 19` always (F1, F33).
 
 Box glyphs (C30, C31) each advance one cell. The A.4 glyph swap changes no
 column, no sum, and no width in this section: `BAR_CELLS` stays 5 and the
@@ -562,6 +601,9 @@ literals alone moved. A.5 restores the one-cell separator before the bar, so
 §1.1 and §1.2 carry recomputed columns; the glyphs stay as A.4 left them.
 
 ### 1.1 Role row
+
+**Fallback path (detection unavailable, or a floor binds): the pre-A.11
+arithmetic, unchanged.**
 
 | Columns | Cells | Field | Constant |
 | --- | --- | --- | --- |
@@ -593,7 +635,8 @@ slot(member)   = agent.model ? padCells(fitModel(label, min(W−19, 20)), W−19
 head           = number + paddedName + space + slot + separator
 ```
 
-`BUILTIN_TAG_TEXT` is 10 cells, so the tag is whole whenever `W−19 >= 10`
+`BUILTIN_TAG_TEXT` is 10 cells, so on the fallback path the tag is whole
+whenever `W−19 >= 10`
 (`W >= 29`); below that the ordinary `clip` rule applies (`min` with
 `ROLE_MODEL_MAX_CELLS` is not applied: the tag's own 10 cells are its cap and
 `clip` cannot exceed them). Precedence: the name clip is confined to columns
@@ -616,7 +659,59 @@ title-string fixtures living outside the pure layer: the **role-row** head
 strings are not one of them, and no TUI-side built-in head composition is
 introduced.
 
+**Proportional path (A.11, §1.4).** Detection succeeded and neither field
+floor binds. `N` is the name field, `M` the model field, `N + M = W − 10`:
+
+| Columns | Cells | Field | Constant |
+| --- | --- | --- | --- |
+| 1–3 | 3 | number: two digits + `.` | `ROLE_NUMBER_CELLS` |
+| 4–(3+N) | N | agent name, clipped with `…` to `N`, padded to `N` | `ROLE_NAME_SHARE_NUM`/`_DEN` (C40), `ROLE_NAME_MIN_CELLS` (C42) |
+| 4+N | 1 | space between name and model | `ROLE_NAME_GAP_CELLS` |
+| (5+N)–(W−6) | M | model field: label clipped to `min(M, ROLE_MODEL_MAX_CELLS)`, padded to `M`; a built-in row puts `BUILTIN_TAG_TEXT` here (C50) | `ROLE_REST_FIXED_CELLS` (C38), `ROLE_MODEL_MIN_CELLS` (C43), `ROLE_MODEL_MAX_CELLS` |
+| W−5 | 1 | separator before the boxes | `ROLE_BAR_GAP_CELLS` |
+| W−4–W | 5 | speed boxes (tight between glyphs) | `BAR_CELLS` |
+
+```
+rest  = W − ROLE_REST_FIXED_CELLS                 // C38: W − 10
+N     = roundHalfUp(rest × ROLE_NAME_SHARE)       // C40: 2/5, half-up (§1.4)
+M     = rest − N
+binds = N < ROLE_NAME_MIN_CELLS || M < ROLE_MODEL_MIN_CELLS
+```
+
+`binds` selects the fallback table above (C48); a split is never half-applied.
+Head = `3 + N + 1 + M + 1 = W − 5`; plus 5 boxes = `W`.
+
+The name clip budget on this path is the whole name field `N` (C48), with no
+9-cell cap: `clip(name, N)`, padded to `N`. R2's 9-cell maximum is the
+fallback path's rule only (R2 as amended, F31 settled).
+
+Exact rows, member `explore` with `agent.model = Go/Kimi K3.1 Pro`:
+
+- `W = 35` (rest 25): `N = 10`, `M = 15`. The 16-cell label splits to
+  `Go/Kimi K3.1 P…` (15 cells: provider `Go`, model budget 12) and the head is
+  `" 1.explore    Go/Kimi K3.1 P… "` (30 cells: 4 spaces after `explore`, the
+  15-cell label, the separator) + 5 boxes. At the same `W` the fallback head
+  is `" 1.explore   Go/Kimi K3.1 Pro "`.
+- `W = 50` (rest 40): `N = 16`, `M = 24`. The label fits, 8 pad cells →
+  `" 1.explore          Go/Kimi K3.1 Pro        "` (45 cells: 10 spaces after
+  `explore`, 16-cell label, 8 pad + 1 separator) + 5 boxes.
+- Name budget is the whole field `N`: at `W = 35` (`N = 10`) a 13-cell name
+  `"design-review"` clips to `"design-re…"` (10 cells); on the fallback path
+  at the same width the 9-cell field gives `"design-r…"`. At `W = 50`
+  (`N = 16`) the 19-cell `"explore-deep-review"` clips to
+  `"explore-deep-re…"` (16) and a 12-cell name renders whole.
+- Built-in `explore`, `W = 35`: tag 10 cells in the 15-cell field, 5 pad →
+  `" 1.explore    [built-in]      "` (30 cells).
+- Built-in `explore`, `W = 26` (rest 16, `N` 6, `M` 10): name `"explo…"`, tag
+  whole with no pad → `" 1.explo… [built-in] "` (21 cells). At `W = 25`
+  (`N` 6, `M` 9) the tag clips to `"[built-i…"` → `" 1.explo… [built-i… "`
+  (20 cells). The tag is whole exactly when `M >= 10`, the tag's own width
+  (C50); Product's "below ~11" resolves to that boundary.
+
 ### 1.2 Instance row
+
+**Fallback path (detection unavailable, or a floor binds): the pre-A.11
+arithmetic, unchanged.**
 
 | Columns | Cells | Field | Constant |
 | --- | --- | --- | --- |
@@ -638,20 +733,24 @@ Both shapes put the separator in column `W − 5`, so the last model cell and th
 bar align across role and instance rows.
 
 A.10 omission (C35, C36). The decision is the **filler slot**, not a reflow:
-the model column keeps its `W − 18` cells and holds spaces when the label is
-suppressed. Reflow is rejected because it would have to widen the title field
-past `INSTANCE_TITLE_CELLS` (C11 is binding) or move the model field's start
-column, which would make the bar column depend on the title text. The
+the model field keeps its `M` cells (`W − 18` on the fallback path) and holds
+spaces when the label is suppressed. Reflow is rejected because it would have
+to widen the title field past `T` (C11 caps it at 8) or move the model field's
+start column, which would make the bar column depend on the title text. The
 arithmetic:
 
 ```
 shown(instance, role) = resolvedShort(instanceRef) !== resolvedShort(roleRef)
-modelField = shown ? padCells(fitModel(label, min(W−18, INSTANCE_MODEL_CELLS)), W−18)
-                   : " ".repeat(W−18)
-head       = " " + glyph + " " + padCells(clip(cleanTitle(title), INSTANCE_TITLE_CELLS), INSTANCE_TITLE_CELLS)
+modelField = shown ? padCells(fitModel(label, min(M, INSTANCE_MODEL_CELLS)), M)
+                   : " ".repeat(M)
+head       = " " + glyph + " " + padCells(clip(cleanTitle(title), T), T)
              + " ".repeat(INSTANCE_TITLE_GAP_CELLS) + modelField
              + " ".repeat(INSTANCE_BAR_GAP_CELLS)
 ```
+
+`T` is the title field and `M` the model field (§1.2, C49): the fallback path
+gives `T = 8`, `M = W − 18`; the proportional path gives
+`T = min(roundHalfUp((W − 10) × 2/5), 8)` and `M = W − 10 − T`.
 
 `resolvedShort(ref)` is the single spelling of a resolved label:
 `ref ? shortLabel(ref) : UNKNOWN_MODEL`. `instanceRef` is R8's `modelRef` for
@@ -659,11 +758,11 @@ the session; `roleRef` is the section's `agent.model` (§R3 comparison
 operands). The comparison runs on these unclipped strings, so two labels that
 would clip to the same 12-cell text still differ (C35).
 
-Both branches produce a `W − 5`-cell head: the column width never changes,
-only its content, so the separator stays in column `W − 5` and the boxes stay
-in columns `W − 4 … W` on every row. That is what preserves R5's
-last-5-columns invariant across rows where one instance shows a label and the
-one above it does not (T12).
+Both branches produce a `W − 5`-cell head: the model field width never
+changes between them, only its content, so the separator stays in column
+`W − 5` and the boxes stay in columns `W − 4 … W` on every row. That is what
+preserves R5's last-5-columns invariant across rows where one instance shows a
+label and the one above it does not (T12).
 
 At `W = 35` (column 17): omitted → 17 spaces, so a title `Inspect modules`
 (`Inspect…`) gives head `" └ Inspect…                   "` (30 cells: 19 spaces
@@ -672,6 +771,47 @@ after an 11-cell label, head `" └ Inspect… Go/Grok 4.7       "` (30 cells).
 At `W = 29` (column 11) the omitted slot is 11 spaces; at `W = 19` (column 1)
 it is one space, so the head is `" └ Inspect…   "` (14 cells) and the row is
 still exactly 19 cells with its 5 boxes (C36's width-pressure fixture).
+
+**Proportional path (A.11, §1.4).** `T` is the title field, `M` the model
+field, `T + M = W − 10`; the title keeps its 8-cell cap, so every title cell
+the share grants beyond 8 flows into the model field:
+
+| Columns | Cells | Field | Constant |
+| --- | --- | --- | --- |
+| 1–3 | 3 | indent: space, glyph, space | `INSTANCE_INDENT_CELLS` |
+| 4–(3+T) | T | session title, clipped with `…` to `T`, padded to `T` | `INSTANCE_TITLE_SHARE_NUM`/`_DEN` (C41), `INSTANCE_TITLE_MIN_CELLS` (C44), `INSTANCE_TITLE_CELLS` |
+| 4+T | 1 | space between title and model | `INSTANCE_TITLE_GAP_CELLS` |
+| (5+T)–(W−6) | M | model field: label clipped to `min(M, INSTANCE_MODEL_CELLS)`, padded to `M`; all spaces when A.10 omits the label (C35, C36) | `INSTANCE_REST_FIXED_CELLS` (C39), `INSTANCE_MODEL_MIN_CELLS` (C45), `INSTANCE_MODEL_CELLS` |
+| W−5 | 1 | separator before the boxes | `INSTANCE_BAR_GAP_CELLS` |
+| W−4–W | 5 | speed boxes (tight between glyphs) | `BAR_CELLS` |
+
+```
+rest  = W − INSTANCE_REST_FIXED_CELLS             // C39: W − 10
+share = roundHalfUp(rest × INSTANCE_TITLE_SHARE)  // C41: 2/5, half-up (§1.4)
+T     = min(share, INSTANCE_TITLE_CELLS)          // C11 cap: 8
+M     = rest − T                                  // unused title cells → model
+binds = T < INSTANCE_TITLE_MIN_CELLS || M < INSTANCE_MODEL_MIN_CELLS
+```
+
+`binds` selects the fallback table above (C49); a split is never half-applied.
+Because `T <= 8`, `M` is never smaller than the fallback field at the same
+`W`: the proportional path only adds model room and moves the boundary
+between the two fields.
+
+Exact rows, title `Inspect modules`, shown label `Go/Grok 4.7` (11 cells):
+
+- `W = 35` (rest 25): `share = 10`, `T = 8`, `M = 17`. The two unused share
+  cells go to the model field, so the row is identical to the fallback row
+  `" └ Inspect… Go/Grok 4.7       "` (30 cells).
+- `W = 28` (rest 18): `share = 7`, `T = 7`, `M = 11` → title `"Inspec…"`,
+  head `" └ Inspec… Go/Grok 4.7 "` (23 cells). The fallback head at the same
+  width is `" └ Inspect… Go/Grok 4… "` (23 cells: 8-cell title, 10-cell
+  field).
+- `W = 24` (rest 14): `T = 6`, `M = 8`. At `W = 23` (rest 13) the share is 5,
+  so the title floor binds and the fallback arithmetic (8 / 5) governs.
+- Omitted label: the slot is `M` spaces (C36). At `W = 28` that is 11 filler
+  cells, so the head is `" └ Inspec…"` + 13 spaces (gap 1, 11 filler,
+  separator 1) = 23 cells.
 
 Composition (A.10) stays in the pure layer, the A.9 way: `instanceLabel` in
 `src/lib/collect.ts` takes the section's role baseline and returns
@@ -699,9 +839,17 @@ Input: a full or short label `P/M…` and a budget `B` cells.
 `n == 1`; otherwise the widest prefix with `prefix + 1 <= n` cells plus `…`.
 Padding to a column is always spaces.
 
-The role label budget is `min(W−19, 20)`; the instance label budget is
-`min(W−18, 12)`. The built-in tag bypasses `fitModel` entirely: it is
-`clip(BUILTIN_TAG_TEXT, W−19)` and no split rule applies (C33, A.9). A.10's
+Budgets are path-dependent (A.11; C48, C49, C50). Fallback path: role label
+`min(W−19, ROLE_MODEL_MAX_CELLS)`, instance label
+`min(W−18, INSTANCE_MODEL_CELLS)`, built-in tag `clip(BUILTIN_TAG_TEXT, W−19)`.
+Proportional path: role label `min(M, ROLE_MODEL_MAX_CELLS)`, instance label
+`min(M, INSTANCE_MODEL_CELLS)`, built-in tag `clip(BUILTIN_TAG_TEXT, M)`, where
+`M` is that row shape's model field (`N + M = W − 10` role, `T + M = W − 10`
+instance). The **name** budget is the full derived field `N` on the dynamic
+path (no 9-cell cap, R2 as amended) and 9 on the fallback path; the title
+budget is `T` (already `<= 8`) and 8 respectively. The built-in tag bypasses
+`fitModel` entirely:
+no split rule applies to it (C33, A.9). A.10's
 comparison happens **before** this section: it compares the unclipped short
 labels (C35), and an omitted instance label never enters `fitModel` or `clip`
 (C36) — the slot is plain spaces, not a clipped empty string. The
@@ -709,6 +857,140 @@ picker label uses a plain `clip(label,
 PICKER_MODEL_CELLS)` — the split rule is not applied there (R9) — and the
 picker agent uses `clip(agent, PICKER_AGENT_CELLS)` with the same `clip` rule
 (§1.3, C24, C28, F16).
+
+### 1.4 Width detection and row width (A.11)
+
+The row width is derived at render time from the host's sidebar width. Nothing
+about it is stored, snapshotted, or persisted.
+
+**SDK surface** (`node_modules/@opencode/plugin/dist/gui/solid.d.ts:33-70`):
+
+- `usePanel(): PanelFrame` — valid only inside a `Panel.render`; it throws
+  outside one.
+- `PanelFrame.placement()` — `"side" | "mobile"`.
+- `PanelFrame.visible()` — region open and this tab selected.
+- `PanelFrame.sidebar: PanelSidebar` — `opened()` (reactive), `width()`
+  (reactive, CSS pixels), `transition()` (`false` until the stored width
+  loads). `width()` is "the inner sidebar preference every side panel shares".
+  It measures the **inner sidebar region**, which may include frame chrome
+  (padding, borders, the reserved region toggle); the design treats it as the
+  slot content width without subtracting padding, and `cellPx` is the
+  calibration knob for that drift. No padding constant exists (F35,
+  settled).
+
+**Probe (pure).** The TUI reads the accessors into one plain object, so
+detection and rounding are testable without the SDK:
+
+```ts
+type WidthProbe = {
+  placement: "side" | "mobile"
+  visible: boolean
+  opened: boolean
+  loaded: boolean      // transition()
+  cssWidth: number     // sidebar.width()
+}
+function detectedCells(probe: WidthProbe | undefined, cellPx: number): number | undefined
+function rowWidth(declaredWidth: number, cellPx: number, probe: WidthProbe | undefined):
+  { W: number; dynamic: boolean }
+```
+
+`detectedCells` returns `roundHalfUp(cssWidth / cellPx)` when the probe is
+present **and** `placement === "side"` **and** `visible` **and** `opened`
+**and** `loaded` **and** `Number.isFinite(cssWidth)` **and** `cssWidth > 0`;
+otherwise it returns `undefined` (C46).
+
+`rowWidth`:
+
+```
+declared = max(MIN_ROW_CELLS, declaredWidth)
+detected = detectedCells(probe, cellPx)
+W        = detected === undefined ? declared : max(MIN_ROW_CELLS, min(declared, detected))
+dynamic  = detected !== undefined
+```
+
+The floor `MIN_ROW_CELLS = 19` is unchanged in both paths: the detected width
+passes through the same `effectiveWidth(W) = max(MIN_ROW_CELLS, W)` that
+`panel()` already applies to the configured width, so a detected 12 becomes 19
+exactly as a configured 12 does. A sidebar narrower
+than 19 cells yields a 19-cell row that overflows the region — the same
+consequence F1 already accepts for a configured width below 19 (F33, settled).
+The cap is `declared`, so detection can only narrow a row, never widen it.
+
+**Rounding.** Every A.11 rounding is half-up on non-negative values:
+`roundHalfUp(x) = floor(x + 1/2)`, so a tie `x.5` always rounds **up**
+(`260 / 8 = 32.5 → 33`; `288 / 8 = 36.0` stays 36). The share is evaluated in
+integers,
+`roundHalfUp(rest × NUM / DEN) = floor((2 × rest × NUM + DEN) / (2 × DEN))`,
+so no floating-point error can enter a split. `cssWidth` may be fractional and
+is rounded once, before the cap.
+
+**Path selection.** `dynamic` comes from detection alone; the field split
+additionally needs both floors clear. `binds` is computed on the fields the
+split would produce (`N`/`M` role, `T`/`M` instance); `binds || !dynamic`
+selects the fallback arithmetic of §1.1/§1.2 exactly as it stands (C48, C49).
+A split is never half-applied: one row is wholly proportional or wholly fixed.
+
+Width ladder (all values computed by the rules above; `M` is the model field):
+
+| W | rest | role `N`/`M` | role fixed 9/`W−19` | instance `T`/`M` | instance fixed 8/`W−18` | path |
+| --- | --- | --- | --- | --- | --- | --- |
+| 19 | 9 | 4/5 → floor | 9/0 | 4/5 → floor | 8/1 | fallback (floor) |
+| 23 | 13 | 5/8 → floor | 9/4 | 5/8 → floor | 8/5 | fallback (floor) |
+| 24 | 14 | 6/8 | 9/5 | 6/8 | 8/6 | proportional |
+| 26 | 16 | 6/10 | 9/7 | 6/10 | 8/8 | proportional (tag whole) |
+| 28 | 18 | 7/11 | 9/9 | 7/11 | 8/10 | proportional |
+| 29 | 19 | 8/11 | 9/10 | 8/11 | 8/11 | proportional |
+| 35 | 25 | 10/15 | 9/16 | 8/17 | 8/17 | proportional |
+| 50 | 40 | 16/24 | 9/31 | 8/32 | 8/32 | proportional |
+| 80 | 70 | 28/42 | 9/61 | 8/62 | 8/62 | proportional |
+
+Floor edges: the last floor-bound width is 23 (role name 5, instance title 5);
+24 is the first proportional width. Tag edge: whole at `M >= 10` (W = 26),
+clipped at `M = 9` (W = 25). Detection edges: W is the minimum of `declared`
+and `detected`, then floored at 19.
+
+**Where it is read (TUI).** `src/tui.tsx` sits in SolidJS. The panel render
+component resolves the frame once in its body, and reads the four accessors
+**inside the same `guarded` memo that builds the view**, so the width stays
+reactive:
+
+```ts
+// component body, inside the R11 guard: a slot outside Panel.render throws
+const frame = (() => { try { return usePanel() } catch { return undefined } })()
+
+// inside the guarded memo, next to sources() and panel():
+const probe: WidthProbe | undefined = frame && {
+  placement: frame.placement(), visible: frame.visible(),
+  opened: frame.sidebar.opened(), loaded: frame.sidebar.transition(),
+  cssWidth: frame.sidebar.width(),
+}
+```
+
+Reading `sidebar.width()` inside the memo is what makes the row width
+reactive: the host's accessor is a signal, so a sidebar resize re-runs the
+memo and `panel()` rebuilds every row at the new `W`. Only the frame handle is
+kept; the width value itself is never snapshotted (unlike the A.8 member set),
+never cached in the view, and never written to storage.
+
+- **R11.** The `usePanel()` call sits inside the existing guard's `try`, so a
+  throw (a slot that is not inside a `Panel.render`, for example
+  `prompt.footer`) degrades to `probe = undefined` and the configured-width
+  path — not to a toast. Only a genuine build failure reaches the toast.
+- **`prompt.footer`.** It is a `context.ui.slot` prompt-region append, not a
+  panel render, so `usePanel()` throws there. Detection does not apply and the
+  configured `width` governs every time (F34). `sidebar.content` and
+  `sidebar.footer` attempt detection and fall back when the host exposes no
+  frame.
+- **Live width change.** A resize between two recomputes rebuilds the rows at
+  the new `W`. Only field sizes and their text change: order, numbering,
+  `working`, `total`, `more`, `filled`, `tps` and every row `state` are
+  width-independent, so no grace window starts, ends, or moves and the R4
+  ticker is not restarted (T21).
+- **No data sync.** Width detection reads no data-layer source and triggers no
+  `session.sync`, `message.sync`, or event subscription. G16 (the message
+  re-sync gate, §2) is untouched.
+- **Compact mode** renders the single line `sub N` and has no width
+  arithmetic; the probe is irrelevant to it.
 
 ## 2. Data flow
 
@@ -731,6 +1013,7 @@ recompute.
 | `context.data.location.model.list(location)` | model id, modelID, providerID, name | model display names only; `limit.context` is no longer read |
 | `context.data.location.provider.list(location)` | provider id, name | provider display names / short label last word |
 | `context.theme` | `text.base`, `text.muted`, `text.feedback.success/warning.base` | title, idle/active/grace text, filled boxes (success), empty boxes (muted) |
+| `usePanel()` frame (`PanelFrame.sidebar`, SDK `gui/solid.d.ts:33-70`) | `placement()`, `visible()`, sidebar `opened()`, `transition()` (stored width loaded), `width()` in CSS px | row-width probe only (§1.4, A.11); layout, never row data and never a sync trigger |
 | `context.storage.store("subagent-live-status-plugin")` | persisted `{ compact }` | R10 |
 | slot input `sessionID` | viewed session id | R3 tab scope; compact count scope |
 | host events (`session.created/deleted/moved/forked/renamed/status/idle/agent.selected/model.selected/execution.started/succeeded/failed/interrupted`, plus `session.step.ended` and `session.message.content.updated`) | invalidation; on `session.created` and `session.execution.started` also a sync trigger, on `session.step.ended` a message re-sync trigger (known-fire: final `tokens` per completed assistant step), on `session.message.content.updated` a second re-sync trigger (delivery unverified; G16) | bump the view signal; load the instance session then its messages; re-read messages when an assistant step ends |
@@ -741,6 +1024,16 @@ Opening a picked session is an action, not a source: the TUI calls
 `context.ui.router.navigate({ type: "session", sessionID })`
 (`src/tui.tsx:373-378`). It never reads `context.ui.router.current()`, so that
 value is not a data source for any field.
+
+Width detection (A.11, §1.4) is a layout input, not a data source. The probe
+is read inside the render memo that builds the view, so a sidebar resize
+re-runs the pass and rebuilds the rows at the new width; it is **not**
+snapshotted (the A.8 member snapshot is unaffected and stays the only
+snapshot). Detection reads no data layer: no `session.sync`, no
+`message.sync`, no new event subscription, so the G16 gate below keeps exactly
+its two triggers and its once-per-session bypass. `prompt.footer` is not a
+panel render, so its probe throws and the configured `width` governs (F34). A
+detection failure degrades to the configured width, never to the R11 toast.
 
 Location: the location the TUI is showing (`context.location`, else
 `context.data.location.default()`). The plugin never merges agent definitions
@@ -902,6 +1195,9 @@ the messages cannot yield a speed (§R6).
   colour rule before and after omission. The bar keeps `barTone(row.filled)`,
   and the empty remainder stays muted (§R6). A row that gains or loses its
   label mid-session changes only the label text, never the tone or state.
+- A.11 changes no colour. Field sizes and their clipping move with the width;
+  row text, the tag, the boxes and `barTone` keep the rules above, and a live
+  width change re-renders the same state (§1.4).
 - The panel is hidden at `total = 0`; compact is shown at `total > 0` and is
   the only line then.
 
@@ -951,9 +1247,15 @@ label**, `resolvedShort(roleRef)` from the section definition's `agent.model`
 definition has none. It is computed with the same short-label function as the
 instance side, so both sides are directly comparable strings. It is compared
 against `resolvedShort(modelRef(session, sources))` **before** the field's
-clip/cap; the role field's `min(W−19, 20)` cap and the built-in tag do not
+clip/cap; the role model text cap (`min(F, ROLE_MODEL_MAX_CELLS)`) and the
+built-in tag do not
 enter the comparison. R8's order is untouched: the instance side still runs
 own model → live agent definition → ancestor → `UNKNOWN_MODEL`.
+
+A.11 changes no resolution step either: §1.4's field sizes change where a
+label clips and how far it pads, never which ref wins. R9's picker keeps its
+fixed budgets (`PICKER_MODEL_CELLS` 96, `PICKER_AGENT_CELLS` 24; C24, C28) and
+is independent of the sidebar width; R10's palette commands are unchanged.
 
 ## 6. Contract numbers
 
@@ -962,19 +1264,24 @@ C5 and C11, and the box glyphs in C30/C31 (`▓` U+2593, `░` U+2591), each of
 which counts as one cell. Values are exact, not shapes; a fixture that
 asserts only width or "contains" does not satisfy R12.
 
+C37–C50 are A.11's dynamic-width numbers; C1–C36 keep their values. A row
+string quoted by C2 or C5–C36 is a **fallback-path** fixture unless its row
+says otherwise: the column arithmetic is path-independent, only the field
+sizes and the text inside them move (§1.1, §1.2, §1.4).
+
 | # | Constant | Value | Field | Fits fixture | Does-not-fit fixture | Req |
 | --- | --- | --- | --- | --- | --- | --- |
 | C1 | `BODY_MAX_LINES` | 10 | body lines, title and overflow excluded | 10 idle roles → 10 rows, `more = 0` | 11 idle roles → 10 rows, `more = 1` | R1, R7 |
 | C2 | `DEFAULT_WIDTH` | 35 | row width when the option is absent | width unset → role head 30 cells + 5 boxes, instance head 30 + 5 | width 30 → role head 25, instance head 25 | R5 |
 | C3 | `ROLE_NUMBER_DIGITS` | 2 | role number digits | role 9 → `" 9."`, role 10 → `"10."` | no emitted role index reaches 100 (body cap); the fixture asserts the highest emitted number is the tenth role | R2 |
 | C4 | `ROLE_NUMBER_CELLS` | 3 | number field (2 digits + `.`) | first role: `head.slice(0,3) === " 1."` | tenth role: `head.slice(0,3) === "10."` (no leading space, still 3 cells) | R2, R5 |
-| C5 | `ROLE_NAME_CELLS` | 9 | agent name field | `"explore"` → `"explore  "`; 9-cell `"123456789"` unchanged | `"1234567890"` → `"12345678…"`; wide `"调研团队组"` (5 wide code points = 10 cells) → `"调研团队…"` (4 wide code points = 8 cells + `…` = 9 cells) | R2, R5 |
+| C5 | `ROLE_NAME_CELLS` | 9 | agent name field, **fallback path only**; the dynamic path's budget is C48's full `N`, with no 9-cell cap (F31 settled) | `"explore"` → `"explore  "`; 9-cell `"123456789"` unchanged; dynamic twin at W 35 (`N = 10`): 10-cell `"1234567890"` unchanged and padded to 10 | `"1234567890"` → `"12345678…"`; wide `"调研团队组"` (5 wide code points = 10 cells) → `"调研团队…"` (4 wide code points = 8 cells + `…` = 9 cells); dynamic twin at W 35: 13-cell `"design-review"` → `"design-re…"` (10 cells), not `"design-r…"` (9) | R2, R5 |
 | C6 | `ROLE_NAME_GAP_CELLS` | 1 | space after the name field | at width 35, `"explore"` + model `Go/Kimi K3.1 Pro` → head `" 1.explore   Go/Kimi K3.1 Pro "` (30 cells, 0-based `head[12] === " "`) | a gap-less implementation starts the model one cell early: its head is `" 1.explore  Go/Kimi K3.1 Pro  "` (30 cells, `head[12] === "G"`, model column 18), so the pinned string fails it | R5 |
 | C7 | `ROLE_MODEL_MAX_CELLS` | 20 | role model label text cap | width 40 (column 21): `"Go/Kimi K3.1 Pro Max"` (20 cells) kept whole | width 40: `"Go/Kimi K3.1 Pro Maxx"` (21 cells) → `"Go/Kimi K3.1 Pro Ma…"` (20 cells) | R5 |
 | C8 | `ROLE_FIXED_CELLS` | 19 | all row cells except the model column (3+9+1+1+5) | width 19 → model column 0, head 14; width 40 → model column 21, head 35 | width 18 → effective width raised to 19 (F1) | R5 |
 | C9 | `BAR_CELLS` | 5 | boxes | `filled = 5` → 5 filled glyphs | `filled = 0` → 5 empty glyphs | R1, R3, R5, R6 |
 | C10 | `INSTANCE_INDENT_CELLS` | 3 | indent (space, glyph, space) | first of two instances at width 35, title `Inspect modules`, model `Go/Grok 4.7`: head `" ├ Inspect… Go/Grok 4.7       "` (30 cells) | both directions fail: a not-last instance rendering `" └ Inspect… Go/Grok 4.7       "` (index 1 is `└`), and the last instance rendering `" ├ …"` instead of `" └ …"`; a 2-cell indent shifts the title left (`" ├I…"`) and fails `head.slice(0, 3) === " ├ "`. The fixture pins `├` on every instance except the last and `└` on the last | R3, R5 |
-| C11 | `INSTANCE_TITLE_CELLS` | 8 | instance title field | `"Inspect modules"` → `"Inspect…"`; 8-cell title unchanged | 9-cell `"abcdefghi"` → `"abcdefg…"`; wide `"调研团队组"` (10 cells) → `"调研团…"` (7 cells: 6 + `…`) | R3, R5 |
+| C11 | `INSTANCE_TITLE_CELLS` | 8 | instance title field cap (both paths; C49 caps `T` at this value) | `"Inspect modules"` → `"Inspect…"`; 8-cell title unchanged | 9-cell `"abcdefghi"` → `"abcdefg…"`; wide `"调研团队组"` (10 cells) → `"调研团…"` (7 cells: 6 + `…`) | R3, R5 |
 | C12 | `INSTANCE_TITLE_GAP_CELLS` | 1 | space after the title field | 0-based `head[11] === " "` at width 35 | a 9-cell title is clipped to 8, so no title cell lands in the gap column | R5 |
 | C13 | `INSTANCE_MODEL_CELLS` | 12 | instance model label text cap | width 35: `"Go/Kimi K3.1"` (12 cells) kept whole, so the column is 12 text + 5 padding | budget 12: `"OpenCode/Kimi K3.1 Pro"` (22 cells) → split `"Open…/Kimi …"` (12 cells); plain `clip` gives `"OpenCode/Ki…"` (12 cells), so the fixture discriminates the split rule | R3, R5 |
 | C14 | `INSTANCE_FIXED_CELLS` | 18 | all row cells except the model column (3+8+1+1+5) | width 35 → model column 17 = 12 text + 5 padding | width 18 → effective width raised to 19, model column 1 (F1) | R5 |
@@ -996,10 +1303,25 @@ asserts only width or "contains" does not satisfy R12.
 | C30 | `BAR_GLYPH_FILLED` | `"▓"` (U+2593, 1 cell) | filled box glyph | `filled = 5` → `"▓▓▓▓▓"` (5 cells); a partially filled bar keeps the filled run leftmost | `filled = 0` → `""` (no filled glyph); the glyph is not U+25AE `▮` | R6 |
 | C31 | `BAR_GLYPH_EMPTY` | `"░"` (U+2591, 1 cell) | empty box glyph | `filled = 0` → `"░░░░░"` (5 cells); `filled = 4` → `"▓▓▓▓░"` (5 cells) | `filled = 5` → `""` (no empty glyph); the glyph is not U+25AF `▯` | R6 |
 | C32 | `BUILTIN_AGENT_IDS` | `["build", "compaction", "explore", "general", "summary", "title"]` (host v2.2.6 registry) | host builtin classification only (A.8) | agent list `[general, explore, coder]` → charter mode, member roles `[coder]`, `M = 1`; `[general, coder]` → charter mode even when `coder` is hidden or primary (mode looks at the unfiltered custom list) | list `[build, general, explore, title]` → no custom id, built-in mode, member roles `[explore, general]` (build primary, title hidden+primary), `M = 2`; list `[general, title]` → built-in mode, member roles `[general]`, `M = 1`; the id `title` must not be mistaken for a custom definition | R1, R2 |
-| C33 | `BUILTIN_TAG_TEXT` | `"[built-in]"` (10 cells) | the built-in role's model slot text (A.9), never a model label | width 29 → model column 10 → tag whole: head `" 1.explore   [built-in] "` (24 cells); width 35 → tag plus 6 pad cells in the 16-cell column, head `" 1.explore   [built-in]       "` (30 cells) | width 28 → model column 9 → `clip("[built-in]", 9)` = `"[built-i…"` (9 cells), head `" 1.explore   [built-i… "` (23 cells); width 20 → column 1 → `"…"`, head `" 1.explore   … "` (15 cells); width 19 → column 0 → `""`, head `" 1.explore    "` (14 cells) | R2 |
-| C34 | built-in tag slot rule | `built-in ? padCells(clip(BUILTIN_TAG_TEXT, W−19), W−19) : (model ? padCells(fitModel(label, min(W−19, 20)), W−19) : " ".repeat(W−19))`; built-in = `agent.id ∈ BUILTIN_AGENT_IDS` | which text fills the role model column (the column width itself is `ROLE_FIXED_CELLS`'s complement, unchanged) | built-in `explore` at width 35 → `" 1.explore   [built-in]       "` + `"▓▓▓░░"` (35 cells); the same row with the host resolving `agent.model = "Go/Kimi K3.1 Pro"` renders the same tag string, not the label (A.9 decision 2) | member `coder` at width 35 with model `"Go/Kimi K3.1 Pro"` → `" 1.coder     Go/Kimi K3.1 Pro "` (30 cells), the A.5/C6 member string unchanged; a built-in **instance** row → `" └ Inspect… Go/Grok 4.7       "` (30 cells), model label when A.10 shows it (C35), no tag | R2, R5 |
+| C33 | `BUILTIN_TAG_TEXT` | `"[built-in]"` (10 cells) | the built-in role's model field text (A.9), never a model label; the field is `W−19` on the fallback path and C48's `M` on the proportional path (C50) | width 29 → model column 10 → tag whole: head `" 1.explore   [built-in] "` (24 cells); width 35 → tag plus 6 pad cells in the 16-cell column, head `" 1.explore   [built-in]       "` (30 cells) | width 28 → model column 9 → `clip("[built-in]", 9)` = `"[built-i…"` (9 cells), head `" 1.explore   [built-i… "` (23 cells); width 20 → column 1 → `"…"`, head `" 1.explore   … "` (15 cells); width 19 → column 0 → `""`, head `" 1.explore    "` (14 cells) | R2 |
+| C34 | built-in tag slot rule | `built-in ? padCells(clip(BUILTIN_TAG_TEXT, F), F) : (model ? padCells(fitModel(label, min(F, ROLE_MODEL_MAX_CELLS)), F) : " ".repeat(F))`, where `F` is the role model field (fallback `W−19`, proportional C48's `M`) and built-in = `agent.id ∈ BUILTIN_AGENT_IDS` | which text fills the role model field (the field width itself comes from C48 or `ROLE_FIXED_CELLS`'s complement) | built-in `explore` at width 35 on the fallback path → `" 1.explore   [built-in]       "` + `"▓▓▓░░"` (35 cells); the same row with the host resolving `agent.model = "Go/Kimi K3.1 Pro"` renders the same tag string, not the label (A.9 decision 2) | member `coder` at width 35 with model `"Go/Kimi K3.1 Pro"` → `" 1.coder     Go/Kimi K3.1 Pro "` (30 cells), the A.5/C6 member string unchanged; a built-in **instance** row → `" └ Inspect… Go/Grok 4.7       "` (30 cells), model label when A.10 shows it (C35), no tag | R2, R5 |
 | C35 | instance model visibility rule (A.10) | `shown = resolvedShort(instanceRef) !== resolvedShort(roleRef)`, with `resolvedShort(ref) = ref ? shortLabel(ref) : UNKNOWN_MODEL`; compared before any clip, cap or padding | whether the instance model column holds a label or is omitted | equal (member role): role `Go/Kimi K3.1 Pro`, instance resolves `Go/Kimi K3.1 Pro` → omitted, head `" └ Inspect…                   "` (30 cells: 3 + 8 + 1 + 17 + 1); the boxes still start in column 31 | differ: role `Go/Kimi K3.1 Pro`, instance `Go/Kimi K3.1 Pro Max` → shown as `" └ Inspect… Go/Kimi K3.…      "` (30 cells: 12-cell split text + 5 pad + 1 separator); a comparison made **after** clipping sees both as `Go/Kimi K3.…` and omits, so it fails the pin. Both unknown (role definition has no model, instance resolves none) → equal → omitted (F29). A temporary built-in role whose tag is shown but whose live definition model equals the instance's → omitted (T8); a role label longer than the 20-cell text cap still compares by its unclipped label and is omitted (T13); refs differing only by variant compare equal and are omitted (T14) | R3 |
-| C36 | omitted-slot rule (A.10) | `shown ? padCells(fitModel(label, min(W−18, 12)), W−18) : " ".repeat(W−18)`; the column stays `INSTANCE_FIXED_CELLS`'s complement and the separator stays | content of the instance model column | omitted at W = 35 → 17 spaces, head 30 cells, separator the 30th cell, boxes 31–35; at W = 30 (column 12) → 12 spaces; at W = 29 (column 11) → 11 spaces; at W = 19 (column 1) → 1 space, head `" └ Inspect…   "` (14 cells), row 19 cells | shown at W = 19 → `fitModel(label, 1)` falls to `clip(label, 1)` = `"…"`, head `" └ Inspect… … "` (14 cells, content differs from the 1-space slot); an implementation that drops the column or the separator when omitted yields a 13-cell head and shifts the boxes, and a reflow that widens the title breaks C11 | R3, R5 |
+| C36 | omitted-slot rule (A.10) | `shown ? padCells(fitModel(label, min(F, INSTANCE_MODEL_CELLS)), F) : " ".repeat(F)`, where `F` is the instance model field (§1.2: fallback `W−18`, proportional C49's `M`); the field width and the separator stay in both branches | content of the instance model field | omitted at W = 35 → 17 spaces, head 30 cells, separator the 30th cell, boxes 31–35; at W = 30 (field 12) → 12 spaces; at W = 29 (field 11) → 11 spaces; at W = 19 (field 1) → 1 space, head `" └ Inspect…   "` (14 cells), row 19 cells; at W = 28 proportional (field 11) → head `" └ Inspec…"` + 13 spaces (23 cells) | shown at W = 19 → `fitModel(label, 1)` falls to `clip(label, 1)` = `"…"`, head `" └ Inspect… … "` (14 cells, content differs from the 1-space slot); an implementation that drops the field or the separator when omitted yields a 13-cell head and shifts the boxes, and a reflow that widens the title breaks C11 | R3, R5 |
+
+| C37 | `CELL_PX` | 8 | CSS pixels per cell; the divisor for width detection | 280 px → `280 / 8 = 35.0` → 35 cells; 288 → 36 | 260 px → 32.5 → 33 cells (half-up; a truncating or half-even rule gives 32); 259 px → 32.375 → 32 | R5 |
+| C38 | `ROLE_REST_FIXED_CELLS` | 10 (number 3 + gap 1 + separator 1 + boxes 5) | role cells outside the proportional split | W 35 → rest 25 → name 10 + model 15 | W 24 → rest 14 → 6 + 8; W 19 → rest 9 (a floor binds, C48) | R5 |
+| C39 | `INSTANCE_REST_FIXED_CELLS` | 10 (indent 3 + gap 1 + separator 1 + boxes 5) | instance cells outside the proportional split | W 35 → rest 25 → title 8 + model 17 | W 24 → rest 14 → 6 + 8; W 19 → rest 9 (a floor binds, C49) | R5 |
+| C40 | `ROLE_NAME_SHARE_NUM` = 2, `ROLE_NAME_SHARE_DEN` = 5 | 2/5 of the rest | role name field share, rounded half-up | rest 25 → 10 (10.0); rest 27 → 11 (10.8); rest 40 → 16 (16.0) | rest 13 → 5 (5.2, below the C42 floor → fallback); rest 14 → 6 (5.6, first non-binding) | R5 |
+| C41 | `INSTANCE_TITLE_SHARE_NUM` = 2, `INSTANCE_TITLE_SHARE_DEN` = 5 | 2/5 of the rest | instance title share, rounded half-up, then capped at 8 | rest 18 → 7 (7.2); rest 19 → 8 (7.6); rest 40 → 16 → capped 8 (C11) | rest 13 → 5 → title floor → fallback; rest 14 → 6 (5.6) | R5 |
+| C42 | `ROLE_NAME_MIN_CELLS` | 6 | name field floor (proportional path) | rest 14 → name 6, split applies | rest 13 → name 5, fallback; T20 pins `" 1.designer  …/K… "` (18 cells) | R5 |
+| C43 | `ROLE_MODEL_MIN_CELLS` | 4 | role model field floor | rest 14 → model 8 | rest 5 → name 2 and model 3 (synthetic: `W >= 19` gives `rest >= 9`, where the model is 5 and the name floor already binds, so this floor is a guard — the C16/C17 precedent) | R5 |
+| C44 | `INSTANCE_TITLE_MIN_CELLS` | 6 | title field floor (proportional path) | rest 14 → title 6 | rest 13 → title 5 → fallback (instance twin of C42) | R5 |
+| C45 | `INSTANCE_MODEL_MIN_CELLS` | 4 | instance model field floor | rest 14 → model 8 | rest 5 → title 2 and model 3 (synthetic, same guard as C43: at `rest 9` the model is 5 and the title floor binds first) | R5 |
+| C46 | `detectedCells` rule | available iff probe present, `placement === "side"`, `visible`, `opened`, `loaded`, finite `cssWidth > 0`; then `roundHalfUp(cssWidth / CELL_PX)` where a tie `x.5` rounds **up**, else `undefined` | detected width in cells, and whether detection counts | probe `{side, visible, opened, loaded, 280}` → 35, `dynamic = true`; `{side, …, 260}` → 33 (32.5 rounds up) | `transition() === false`, `opened() === false`, `visible() === false`, `placement === "mobile"`, `cssWidth 0`, `cssWidth NaN`, or no probe → `undefined`, `dynamic = false` | R5 |
+| C47 | `rowWidth` rule | `declared = max(MIN_ROW_CELLS, width ?? DEFAULT_WIDTH)`; `W = detected === undefined ? declared : max(MIN_ROW_CELLS, min(declared, detected))` | effective width | declared 35, detected 50 → W 35 (cap); declared 35, detected 28 → W 28; declared 18 → 19 | declared 35, detected 12 → W 19 (floor, not 12); detected undefined → 35 | R5 |
+| C48 | role split rule (A.11) | `rest = W − C38`; `N = roundHalfUp(rest × 2/5)`; `M = rest − N`; `dynamic && N >= 6 && M >= 4` → `N`/`M`, else the pre-A.11 `9 / (W − 19)` | role field sizes and the name text budget | W 35 dynamic → 10/15 → `" 1.explore    Go/Kimi K3.1 P… "` (30 cells); W 50 dynamic → 16/24 → `" 1.explore          Go/Kimi K3.1 Pro        "` (45 cells) | W 35 fallback → 9/16 → `" 1.explore   Go/Kimi K3.1 Pro "` (30 cells) at the same W; W 23 dynamic → floor → 9/4 → `" 1.designer  …/K… "` (18 cells) | R5 |
+| C49 | instance split rule (A.11) | `rest = W − C39`; `share = roundHalfUp(rest × 2/5)`; `T = min(share, INSTANCE_TITLE_CELLS)`; `M = rest − T`; `dynamic && T >= 6 && M >= 4` → `T`/`M`, else the pre-A.11 `8 / (W − 18)` | title and model field sizes, and the unused-title-cells rule | W 28 dynamic → 7/11 → `" └ Inspec… Go/Grok 4.7 "` (23 cells); W 35 dynamic → 8/17 (identical to fallback); W 24 dynamic → 6/8 | W 28 fallback → 8/10 → `" └ Inspect… Go/Grok 4… "` (23 cells) at the same W; W 23 dynamic → floor → 8/5 | R5 |
+| C50 | built-in tag in the derived role model field | `padCells(clip(BUILTIN_TAG_TEXT, M), M)` where `M` is C48's model field on the proportional path and `W − 19` on the fallback path; the tag's 10 cells are its own cap, `ROLE_MODEL_MAX_CELLS` never applies | tag text and its field | W 26 dynamic → M 10 → `" 1.explo… [built-in] "` (21 cells); W 35 dynamic → M 15 → `" 1.explore    [built-in]      "` (30 cells) | W 25 dynamic → M 9 → `" 1.explo… [built-i… "` (20 cells); W 28 fallback → field 9 → `" 1.explore   [built-i… "` (23 cells) | R2, R5 |
 
 C32 is a set-membership boundary, not a width. The fits side is "the list has
 at least one id outside the set"; the does-not-fit side is "every id is in the
@@ -1013,8 +1335,9 @@ C35's comparison is text equality, not ref equality: both sides run through
 the one `resolvedShort` helper, so two different refs that produce the same
 short label (including two refs that differ only by `variant`, which the short
 label drops, R8) compare equal and the cell is omitted (F30). "Before any
-clipping" means before `fitModel`, before `min(W−18, 12)`, before padding and
-before the role field's `min(W−19, 20)` cap: the operands are the unclipped
+clipping" means before `fitModel`, before the model text cap (C36's
+`min(M, INSTANCE_MODEL_CELLS)`, C34's `min(F, ROLE_MODEL_MAX_CELLS)`), before
+padding and before the role name clip: the operands are the unclipped
 `shortLabel` strings. The C35 does-not-fit fixture discriminates this: role
 `Go/Kimi K3.1 Pro` and instance `Go/Kimi K3.1 Pro Max` both clip to
 `Go/Kimi K3.…`, so a post-clip comparison would wrongly omit the label.
@@ -1080,6 +1403,42 @@ One constant, one meaning, checked at the places the numbers collide:
   (12) still caps the label **text** when it is shown; the omitted slot is
   padding in the same `INSTANCE_FIXED_CELLS` complement, so no new width
   constant exists for it (C36).
+- `ROLE_REST_FIXED_CELLS` (10) and `INSTANCE_REST_FIXED_CELLS` (10) are two
+  constants for two fields — the role split budget and the instance split
+  budget. They are equal by construction, never interchangeable (the A.5
+  separator precedent). Neither is `ROLE_FIXED_CELLS`/`INSTANCE_FIXED_CELLS`:
+  those stay the fallback totals (19/18) and are not reused as dynamic rest
+  values.
+- `ROLE_NAME_SHARE_NUM`/`_DEN` and `INSTANCE_TITLE_SHARE_NUM`/`_DEN` are two
+  shares for two fields, each 2/5 by construction. A share is a multiplier on
+  the rest, not a width; the resulting `N` and `T` are the fields (C40, C41).
+- The four floors — `ROLE_NAME_MIN_CELLS` (6), `ROLE_MODEL_MIN_CELLS` (4),
+  `INSTANCE_TITLE_MIN_CELLS` (6), `INSTANCE_MODEL_MIN_CELLS` (4) — are one per
+  field. The 6/6 and 4/4 coincidences are construction only. None may be
+  replaced by `INSTANCE_TITLE_CELLS` (a cap, not a floor), by
+  `ROLE_NAME_CELLS` (the fallback name cap), or by a bare literal.
+- `CELL_PX` (8, C37) is the detection divisor only. It is not a cell width
+  (§0's `cellWidth`), not `DEFAULT_WIDTH`, and never a field size: `width` is
+  a cell count, `cellPx` a pixel count, and the conversion happens once in
+  C46.
+
+A.11 fixture contract. Each of C37–C50 carries a fits and a does-not-fit
+fixture in its row, and every A.11 row string is pinned through `panel()` with
+the proportional flag set, never through a TUI string. **Every fixture states
+its path** (`dynamic` or `fallback`), and a same-`W` pair with two different
+exact strings is legitimate and expected, not a contradiction (F32, settled):
+at W 35 the role head is `" 1.explore    Go/Kimi K3.1 P… "` on the dynamic
+path and `" 1.explore   Go/Kimi K3.1 Pro "` on the fallback path. C1, C2 and
+the C5–C36 row strings keep their pre-A.11 fixtures on the fallback path
+(`dynamic = false`, the default), so no existing fixture changes. The boundary
+set a dynamic fixture must cover: rest 13/14 (floor edge, W 23/24), model
+field 9/10 (tag edge, W 25/26), declared vs detected on both sides of the cap,
+a detected width below the floor (12 → 19), W 35 (two paths at one width),
+W 50 (name field above the 9-cell fallback cap), and one live width change
+(T21). T15–T23 pin those values. T1–T14 and S1–S12 stay fallback-path fixtures
+(`dynamic = false`); none of them pins a proportional row, and their instance
+geometry coincides with the proportional path only from `W = 29` up, where
+`T = 8` and `M = W − 18` on both paths.
 
 Fixtures for C1 that pin the section-stop rule (R7, §4, F5). Width 35;
 sections built from roles and instances as stated.- Stop rule (discriminating): role `A` with 7 instances (8 body lines), then
@@ -1095,8 +1454,9 @@ sections built from roles and instances as stated.- Stop rule (discriminating): 
 - Five-instance role boundary: role with 5 instances (6 lines) plus 10 idle
   roles → body = 6 + 4 idle = 10 lines, `more = 6`.
 
-C8 recomputation (width ladder), pinned — `ROLE_FIXED_CELLS = 19`, so the
-role model column is `W − 19` and the head is `W − 5` at every width:
+C8 recomputation (fallback-path width ladder), pinned — `ROLE_FIXED_CELLS = 19`,
+so on the fallback path the role model column is `W − 19` and the head is
+`W − 5` at every width (the proportional path's ladder is §1.4):
 
 | W | model column | head cells | head + 5 boxes |
 | --- | --- | --- | --- |
@@ -1317,7 +1677,10 @@ separator (7 spaces after `]`).
 - **T4 — the name clip never eats the tag (A.9 decision 4).** Built-in name
   `"1234567890"` (10 cells) → `clip` gives `"12345678…"` (9 cells, C5) and the
   head is `" 1.12345678… [built-in]       "` (30 cells): one `ROLE_NAME_GAP_CELLS`
-  space, the whole tag, 6 pad, 1 separator.
+  space, the whole tag, 6 pad, 1 separator. Dynamic twin at the same width
+  (`N = 10`, C48): the 10-cell name fits whole, head
+  `" 1.1234567890 [built-in]      "` (30 cells: gap 1, tag 10, 5 pad,
+  1 separator).
 - **T5 — width pressure on the tag (C33).** Same built-in row at width 29:
   `" 1.explore   [built-in] "` (24 cells, no pad); at width 28:
   `" 1.explore   [built-i… "` (23 cells); at the `MIN_ROW_CELLS` floor 19:
@@ -1420,6 +1783,84 @@ state their own heads.
   that. The full labels differ, which is why this fixture also pins that the
   operand is the short label, not the full one.
 
+### A.11 dynamic-width scenarios (exact values)
+
+`dynamic = false` unless a scenario says otherwise; `W` is the effective width
+from §1.4. Charter snapshot `[coder]` or member `explore` with model
+`Go/Kimi K3.1 Pro`; bars are 3 filled unless stated. Every head below is
+`W − 5` cells and the boxes are the last 5 columns.
+
+- **T15 — proportional role split at W 35 (C48).** Member `explore`, model
+  `Go/Kimi K3.1 Pro`, detection at 280 px with `cellPx 8` → `W 35`,
+  rest 25, `N 10`, `M 15`. The 16-cell label splits at 15 to
+  `Go/Kimi K3.1 P…` → head `" 1.explore    Go/Kimi K3.1 P… "` (30 cells:
+  4 spaces after `explore`, 15-cell label, separator) + `"▓▓▓░░"` = 35 cells.
+  Fallback twin at the same width: `" 1.explore   Go/Kimi K3.1 Pro "` (30).
+- **T16 — cap and narrowing (C47).**
+  - declared 35, detected 50 (400 px) → `W 35`, `dynamic = true` → T15's
+    string: detection can only narrow.
+  - declared 40, detected 50 → `W 40`, rest 30, `N 12`, `M 18`; the 16-cell
+    label fits with 2 pad → head `" 1.explore      Go/Kimi K3.1 Pro   "`
+    (35 cells: 6 spaces after `explore`, 2 pad + 1 separator after the label).
+  - declared 35, detected 28 (224 px) → `W 28`, rest 18, `N 7`, `M 11`; the
+    label splits to `Go/Kimi K3…` (11) → head `" 1.explore Go/Kimi K3… "`
+    (23 cells).
+- **T17 — tag edge at W 28 (C50).** Built-in `explore`:
+  - fallback (`dynamic = false`) → 9-cell field → `clip` gives `"[built-i…"`,
+    head `" 1.explore   [built-i… "` (23 cells).
+  - detection at 224 px → `W 28`, `N 7`, `M 11` → tag whole with 1 pad, head
+    `" 1.explore [built-in]  "` (23 cells: tag 10, 1 pad, 1 separator).
+  The two rows are the same width and differ only in field sizes and text.
+- **T18 — proportional instance split at W 28 (C49).** Title
+  `Inspect modules`, shown label `Go/Grok 4.7` (11 cells):
+  - detection at 224 px → rest 18, `T 7`, `M 11` → title `"Inspec…"`, label
+    fits → head `" └ Inspec… Go/Grok 4.7 "` (23 cells).
+  - fallback → `T 8`, field 10 → label splits to `Go/Grok 4…` → head
+    `" └ Inspect… Go/Grok 4… "` (23 cells).
+- **T19 — title cap and unused cells (C49).** Title `Inspect modules`, shown
+  label `Go/Grok 4.7`:
+  - `W 35` → rest 25, share 10, `T = min(10, 8) = 8`, `M = 17`: the 2 unused
+    share cells go to the model field, so the head is
+    `" └ Inspect… Go/Grok 4.7       "` (30 cells), identical to the fallback
+    row.
+  - `W 50` → rest 40, share 16, `T 8`, `M = 40 − 8 = 32` (8 unused cells to
+    the model), head `" └ Inspect… Go/Grok 4.7"` + 22 spaces (21 pad + 1
+    separator) = 45 cells.
+  - Discriminator: an implementation that leaves the title field at the
+    uncapped share (16 at W 50) keeps `M` at 24 and starts the label 8 cells
+    later; the pinned string fails it.
+- **T20 — floor binds, fallback arithmetic at W 23 (C42, C48).** Member
+  `designer` with model `Go/Kimi`, detection at 184 px → `W 23`, rest 13,
+  share 5. `N 5 < 6` → fallback: 9-cell name, 4-cell field, label splits to
+  `…/K…` → head `" 1.designer  …/K… "` (18 cells). If the split were applied
+  anyway the head is `" 1.desi… Go/Kimi  "` (18 cells: 5-cell name, 8-cell
+  field) — same width, different content, so the fixture discriminates.
+- **T21 — a live width change rebuilds rows, nothing else.** A member role
+  with one active instance (50 tps → `filled 3`) and one grace instance, read
+  at `W 35` and then at `W 50` (sidebar resized by 120 px). Both passes:
+  `working`, `total`, `more`, numbering, order, every `filled`, every `tps`
+  and every row `state` are identical; the grace row is still grace at
+  `now − ended = 29 999` in both passes. Only the heads change: role
+  30 → 45 cells, instance 30 → 45 cells, bars 31–35 → 46–50. No timer starts,
+  stops, or re-reads `now`; no grace window moves.
+- **T22 — detection unavailable (C46).** Declared 35, member `explore` with
+  `Go/Kimi K3.1 Pro`. Each probe below yields `detected = undefined`,
+  `dynamic = false`, and the same head `" 1.explore   Go/Kimi K3.1 Pro "`:
+  no probe (a slot outside `Panel.render`, e.g. `prompt.footer`);
+  `transition() === false` (stored width not loaded); `opened() === false`;
+  `visible() === false`; `placement === "mobile"`; `cssWidth 0`; `cssWidth
+  NaN`. Only `{side, visible, opened, loaded, 280}` reaches T15's dynamic row.
+- **T23 — the name budget is the full field (C5, C48, F31 settled).** Member
+  `design-review` (13 cells) with model `Go/Kimi K3.1 Pro`, detected 280 px →
+  `W 35`, `N 10`, `M 15`. The name clips to `"design-re…"` (10 cells), the
+  label splits at 15 to `Go/Kimi K3.1 P…`, head
+  `" 1.design-re… Go/Kimi K3.1 P… "` (30 cells) + 5 boxes. Fallback twin at
+  the same width: 9-cell name `"design-r…"` and 16-cell field
+  `Go/Kimi K3.1 Pro` → head `" 1.design-r… Go/Kimi K3.1 Pro "` (30 cells).
+  At `W 50` (`N 16`) the same 13-cell name renders whole with 3 pad cells. An
+  implementation that still clips the name at 9 emits
+  `" 1.design-r… Go/Kimi K3.1 P… "` (29 cells) and fails the 30-cell pin.
+
 ## 7. Known gaps
 
 Where the current code, read-only, disagrees with this design. Each gap is a
@@ -1514,7 +1955,9 @@ traceability, not as a task.
   Both bypass the once-per-session guard. Host-call side effect: verified in
   review by inspection, not by a pure-layer fixture (R12). A.8 does not narrow
   the sync gate: a temporary builtin is a visible agent, so its session syncs
-  and its bar fills like a member's (G20).
+  and its bar fills like a member's (G20). A.11 leaves this gate untouched:
+  width detection is render-only, reads no data layer, and triggers no sync
+  (§1.4).
 - **G17 (R6) — closed in code; references refreshed.** The speed computation
   exists: `speedTps` (`src/lib/collect.ts:193-223`) keeps only counted
   assistant messages (§R6 filter) and returns
@@ -1569,7 +2012,8 @@ traceability, not as a task.
   (`src/lib/collect.ts:454-462`) always fits `model` into the column, and every
   busy and idle section carries one (`:606`, `:639`). Required: pass
   `agent.id ∈ BUILTIN_AGENT_IDS` into `roleHead` and take the C34 slot branch
-  (`padCells(clip(BUILTIN_TAG_TEXT, W−19), W−19)`), export `BUILTIN_TAG_TEXT`
+  (`padCells(clip(BUILTIN_TAG_TEXT, roleModelField), roleModelField)`; A.11
+  later generalises the field to C50), export `BUILTIN_TAG_TEXT`
   (C33), and leave instance rows, `barFill`, `barTone`, `PanelRow`, and every
   existing width constant untouched. No TUI change: the tag rides in
   `row.head` (`src/tui.tsx:344`). Fixtures T1–T5 pin the exact strings.
@@ -1585,6 +2029,19 @@ traceability, not as a task.
   second unknown constant. `PanelRow`, the TUI (`src/tui.tsx:344`), every width
   constant, and all C1–C34 values are unchanged. Fixtures T6–T14 pin the exact
   strings.
+- **G23 (R5, A.11)** — The TUI passes `width={() => options.width}`
+  (`src/tui.tsx:495`) and `panel()` only raises it to `MIN_ROW_CELLS`
+  (`src/lib/collect.ts:448-458`); `roleHead`/`instanceHead` always use the
+  fallback complements, no `cellPx` option is read, and `usePanel()` is never
+  called. Required: read the probe inside the guarded memo (§1.4), add
+  `cellPx` with the C37 default (finite and `> 0`, else 8), pass the detected
+  `W` and the `dynamic` flag into `panel()`
+  (`panel(sources, sessionID, width, maxLines, now, graceMs, dynamic = false)`,
+  so today's call sites and fixtures keep the fallback path), and take the
+  C48/C49 splits in `roleHead`/`instanceHead`. Untouched: R6 bars, tones and
+  glyphs, every C1–C36 value, the A.8 member snapshot, the A.9 tag text, the
+  A.10 comparison, and G16's sync gate (width detection reads no data and
+  triggers no sync).
 - **D1 debug option (temporary diagnostic, not in the contract).** The plugin
   accepts `debug: true` or `debug: "<path>"` and appends one JSONL record per
   recompute to `/tmp/opencode/subagent-model-debug.jsonl`; the string form
@@ -1605,8 +2062,9 @@ updates; F16 is settled (human decision A1); F17 is obsolete at A.3; F18–F22
 are the new decisions A.3 forces; F23 is settled (human decision A.4); F24 is
 settled (human decision A.5); F20 is obsolete at A.6 (human decision).
 F25–F28 are the new points A.8 surfaces; F29–F30 are the new points A.10
-surfaces. F16, F17, F20, F23 and F24 are listed
-with their source rather than as requests for an answer.
+surfaces; F31–F36 are A.11's points, settled by PM arbitration (F31 by the
+Product amendment to R2). F16, F17, F20, F23 and
+F24 are listed with their source rather than as requests for an answer.
 
 - **F1 (R5 width domain).** R5 gives no lower bound on `width`. Below 19 cells
   the role row cannot hold its fields; the design raises the effective width
@@ -1726,8 +2184,9 @@ with their source rather than as requests for an answer.
   width-dependent field (`width - 19, capped at 20`) but the instance model a
   fixed `12` plus "padding to align". The design reads that literally: the
   instance text cap stays 12 at every width and the extra column cells are
-  padding (C13, C14, C27). Confirm, or say the instance text grows with the
-  column like the role's.
+  padding (C13, C14, C27). A.11 changes the field size around that cap, never
+  the cap. Confirm, or say the instance text grows with the field like the
+  role's.
 - **F22 (R4/R6 ticker and in-flight messages).** R6 says the speed is
   "recomputed when a new message arrives or on the 1-second ticker", but R4
   runs that ticker only while a grace row is inside its window. The design
@@ -1800,6 +2259,40 @@ with their source rather than as requests for an answer.
   information. A variant marker in the short label is not adopted, because it
   would move R8's label rule and the field's 12-cell budget. Recorded as a
   settled decision, not an open question.
+- **F31 (R2 vs R5/A.11, name width) — settled by the Product amendment (PM
+  arbitration).** R2 now reads: on the dynamic path the name uses the full
+  proportional name field and clips with `…` only beyond that field; on the
+  fallback path 9 cells as before. The design follows it: the name budget is
+  `N` (C48, §1.1, §1.3) with no 9-cell cap, and `ROLE_NAME_CELLS = 9` plus
+  C5's clips apply to the fallback path only. Fixture T23 and C5's dynamic
+  twin.
+- **F32 (R5, one width, two rows) — settled (no behaviour change).** The
+  fallback/cap rule means a detected width of 35 and a configured width of 35
+  produce different role rows
+  (`" 1.explore    Go/Kimi K3.1 P… "` against
+  `" 1.explore   Go/Kimi K3.1 Pro "`). That follows from "proportional once
+  detection succeeds"; it also means a row can change once when the stored
+  width loads. The fixture contract now makes the path explicit on every
+  fixture and treats a same-`W` pair with different exact strings as expected
+  (§6, A.11 fixture contract).
+- **F33 (R5, floor under detection) — settled.** A sidebar narrower than 19
+  cells still renders a 19-cell row that overflows the region: the detected
+  width passes through the same `effectiveWidth(W) = max(MIN_ROW_CELLS, W)`
+  the configured width already uses (§1.4), so F1's precedent holds.
+- **F34 (R5, prompt.footer) — settled.** `usePanel()` throws outside a panel
+  render, so detection applies only to the side region; `prompt.footer` and
+  every non-side placement fall back to the configured width (§1.4).
+- **F35 (R5, `sidebar.width()` semantics) — settled as a calibration
+  caveat.** The SDK calls `PanelFrame.sidebar.width()` "the inner sidebar
+  preference every side panel shares" (CSS px). It measures the inner sidebar
+  region, which may include frame chrome — padding, borders, the reserved
+  region toggle — and the design treats it as the slot content width without
+  subtracting padding (§1.4). No padding constant is added; `cellPx` is the
+  calibration knob for that drift.
+- **F36 (R5, rounding tie rule) — settled: half-up.** Product says "rounded"
+  and "40% rounded" without a tie rule. The design fixes half-up everywhere —
+  the share (C40, C41) and the pixel division (C46), where a tie `x.5` rounds
+  up: `260 px / 8 = 32.5 → 33`, `rest 25 × 2/5 = 10.0 → 10`.
 
 ## 9. Revision notes
 
@@ -1947,3 +2440,53 @@ with their source rather than as requests for an answer.
   reads 6 pad cells for an 11-cell label; T13 (the role text cap is not the
   comparison operand) and T14 (variant-only equality) were added; F29 and F30
   are recorded as settled by PM arbitration, not open questions.
+- **A.11 dynamic-width amendment.** Human decision at the R5 level: the row
+  width is derived at render time from the host's reactive
+  `PanelFrame.sidebar.width()` (CSS px) divided by the new `cellPx` option
+  (default 8) and rounded, and the field split is proportional. **Width
+  rule:** detection available (panel in the side region, region visible,
+  sidebar open, stored width loaded, finite positive CSS width) →
+  `W = max(MIN_ROW_CELLS, min(configured, roundHalfUp(cssWidth / cellPx)))`, so
+  the configured `width` is a cap; detection unavailable → the configured
+  width governs. `MIN_ROW_CELLS = 19` is unchanged in both paths. **Split
+  rule:** rest `W − 10` on both shapes; role name `roundHalfUp(rest × 2/5)`
+  and model the remainder; instance title `min(roundHalfUp(rest × 2/5), 8)`
+  with the unused title cells added to the model field; floors name/title 6
+  and model field 4; a bound floor or missing detection selects the pre-A.11
+  fixed arithmetic (9/`W−19` role, 8/`W−18` instance). **New numbers:**
+  C37–C50. **Fixtures:** the §1.4 ladder plus T15–T23; C1/C2 and the C5–C36
+  row strings stay fallback-path fixtures with unchanged values.
+  **Unchanged:** `FILL_BANDS` and the whole R6 bar (A.7), A.8's member
+  selection and snapshot, A.9's tag text and C33, A.10's comparison and C35,
+  glyphs, tones, R9's picker budgets, R10's commands, and G16's sync gate.
+  C34 and C36 now reference the derived field size `F` instead of the literal
+  `W−19`/`W−18`; on the fallback path their values are identical.
+  **Correction recorded for the Coder:** the instance rest is `W − 10`
+  (indent 3 + gap 1 + separator 1 + boxes 5), not `W − 18`; `W − 18` is the
+  fallback instance model field. `panel()` gains `dynamic = false` as its last
+  parameter, so existing call sites and fixtures keep the fallback path.
+  **Moved:** R2 (name sentence), R3 (title and model-field sentences), R5
+  (dynamic and proportional bullets, fallback labelling), §0 (`head` width),
+  §1 (`W` definition), §1.1, §1.2, §1.3 (budgets), new §1.4, §2 (probe source
+  row and detection paragraph), §3 (colour note), §5 (A.11 sentence, R9/R10
+  note), §6 (C5, C11, C33, C34, C36 wording; C37–C50; the A.11 fixture
+  contract; the `### A.11` scenarios), §7 (G23, G16 sentence), §8 (F31–F36).
+- **A.11 arbitration round (PM; F31–F36).** F31 settled by the Product
+  amendment: R2's name bullet now gives the dynamic path the **full**
+  proportional field, clipping with `…` only beyond it, and 9 cells on the
+  fallback path. Layout numbers do not move, because `N` was already the split
+  field; only the name **text budget** changes to `clip(name, N)`
+  unconditionally on that path. Moved with it: the R2 sentence, §1.1's name
+  budget note and its new `"design-review"` example, §1.3's budget sentence,
+  C5 (scope "fallback path only" plus its dynamic twin), T4's dynamic twin,
+  and the new T23. `N`, `M`, `T`, every head length (`W − 5`) and every
+  C37–C50 value are unchanged: at W 35 a clipped name now uses 10 cells
+  instead of 9 and the head stays 30 cells because `M` is still 15.
+  **F32** settled with no behaviour change: the fixture contract now states
+  the path on every fixture and calls a same-`W` pair with two exact strings
+  legitimate. **F33** settled: §1.4 states that the detected width passes
+  through the same `effectiveWidth` floor. **F34** kept: detection is
+  side-region only and `prompt.footer` uses the configured width. **F35**
+  settled as a caveat: `sidebar.width()` may include frame chrome, no padding
+  is subtracted, `cellPx` is the calibration knob. **F36** settled: half-up,
+  with a tie `x.5` rounding up stated in §1.4 and C46.

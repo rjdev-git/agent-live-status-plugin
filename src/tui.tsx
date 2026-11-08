@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
+import { usePanel } from "@opencode/plugin/gui"
 import type { ResolvedTheme } from "@opencode/theme/tui"
 import { parseColor, type RGBA } from "@opentui/core"
 import type { JSX } from "@opentui/solid"
@@ -12,6 +13,7 @@ import {
   BAR_GLYPH_FILLED,
   BODY_MAX_LINES,
   DEFAULT_WIDTH,
+  GRACE_MS,
   GRACE_TICK_MS,
   UNKNOWN_MODEL,
   barFill,
@@ -24,12 +26,15 @@ import {
   modelRef,
   panel,
   pickerTitle,
+  resolveCellPx,
+  rowWidth,
   speedTps,
   type AgentInfo,
   type MemberSet,
   type PanelRow,
   type RunningSubagent,
   type Sources,
+  type WidthProbe,
 } from "./lib/collect"
 
 /** Default path for the temporary debug dump; overridable with `debug: <path>`. */
@@ -58,6 +63,8 @@ type Options = {
   compact?: boolean
   bind?: string
   width: number
+  /** CSS pixels per cell for width detection (C37). */
+  cellPx: number
   /** Debug log path when the diagnostic is on; undefined keeps it off. */
   debug?: string
 }
@@ -75,6 +82,7 @@ function readOptions(context: Context): Options {
     compact: typeof raw.compact === "boolean" ? raw.compact : undefined,
     bind: typeof raw.bind === "string" ? raw.bind : undefined,
     width: typeof raw.width === "number" && raw.width > 0 ? raw.width : DEFAULT_WIDTH,
+    cellPx: resolveCellPx(raw.cellPx),
     debug:
       raw.debug === true
         ? DEBUG_LOG_PATH
@@ -270,6 +278,7 @@ function Status(props: {
   bump: () => void
   compact: () => boolean
   width: () => number
+  cellPx: () => number
   members: () => MemberSet | undefined
   debug?: string
 }) {
@@ -277,14 +286,42 @@ function Status(props: {
   let lastGood: { view: GoodView; running: number } | undefined
   let lastFailure: string | undefined
 
+  // §1.4: a slot outside `Panel.render` throws here; detection then degrades to
+  // the configured-width path instead of the R11 toast (F34).
+  const frame = (() => {
+    try {
+      return usePanel()
+    } catch {
+      return undefined
+    }
+  })()
+
   // Source reads and view building share one guard: a thrown error keeps the
   // last good view, reports once per message, and never blanks the slot (R11).
   const guarded = createMemo(() => {
     props.tick()
     beat()
     try {
+      // §1.4: the accessors are read inside this memo, so `sidebar.width()` is
+      // tracked and a resize re-runs the pass. The value is never snapshotted.
+      const probe: WidthProbe | undefined = (() => {
+        if (!frame) return undefined
+        try {
+          return {
+            placement: frame.placement(),
+            visible: frame.visible(),
+            opened: frame.sidebar.opened(),
+            loaded: frame.sidebar.transition(),
+            cssWidth: frame.sidebar.width(),
+          }
+        } catch {
+          // A detection failure is a layout fallback, never a panel failure.
+          return undefined
+        }
+      })()
+      const { W, dynamic } = rowWidth(props.width(), props.cellPx(), probe)
       const data = sources(props.context, props.members())
-      const view = panel(data, props.sessionID, props.width(), BODY_MAX_LINES)
+      const view = panel(data, props.sessionID, W, BODY_MAX_LINES, Date.now(), GRACE_MS, dynamic)
       // Every running instance in scope: queue its sync so the bar fills once it lands (G16).
       // The gate stays member-independent so a temporary builtin's bar fills (G20).
       const runningRows = props.sessionID ? collect(data, props.sessionID) : []
@@ -493,6 +530,7 @@ export default Plugin.define({
         bump={bump}
         compact={compact}
         width={() => options.width}
+        cellPx={() => options.cellPx}
         members={members}
         debug={options.debug}
       />
