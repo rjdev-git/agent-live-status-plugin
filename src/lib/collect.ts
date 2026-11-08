@@ -252,6 +252,9 @@ export const AGENT_CELLS = 9
 /** Instance titles are clipped to this many cells. */
 export const INSTANCE_CELLS = 8
 
+/** Instance model labels are clipped to this many cells. */
+export const INSTANCE_MODEL_CELLS = 12
+
 /** Everything in a row except the model label: number, agent, spaces, boxes. */
 const ROW_FIXED_CELLS = 19
 
@@ -441,7 +444,7 @@ export function panel(
   }
   const instanceLine = (glyph: "├" | "└", instance: Section["instances"][number], color?: string) => {
     const title = truncate(cleanTitle(instance.session.title ?? instance.session.id), INSTANCE_CELLS)
-    const model = fitModel(shortLabelOf(instance.session, sources, label), INSTANCE_CELLS)
+    const model = fitModel(shortLabelOf(instance.session, sources, label), INSTANCE_MODEL_CELLS)
     rows.push({
       head: ` ${glyph} ${title.padEnd(INSTANCE_CELLS)} ${model.padEnd(budget + 1)} `,
       filled: fillFor(instance.session, sources),

@@ -274,6 +274,33 @@ test("fitModel gives the provider half at most and the model the rest", () => {
   assert.equal(fitModel("NoSlashModelNameLongerThanBudget", 16), "NoSlashModelNam…")
 })
 
+test("instance rows show an 8-cell title and a 12-cell model", () => {
+  const NOW = 1_000_000
+  const sources: Sources = {
+    sessions: fakeSessions(
+      [
+        {
+          id: "long-title",
+          parentID: "root",
+          agent: "aa",
+          title: "Inspect modules thoroughly",
+          model: { id: "deepseek-flash", providerID: "deepseek" },
+          time: { created: NOW },
+        },
+      ],
+      ["long-title"],
+    ),
+    agents: [{ id: "aa", name: "Alpha", mode: "subagent", model: { id: "deepseek-flash", providerID: "deepseek" } }],
+    models,
+    providers,
+  }
+
+  const view = panel(sources, undefined, 35, 10, NOW)
+  const instance = view.rows.find((row) => row.head.startsWith(" ├"))!
+  assert.match(instance.head, /^ ├ Inspect… DeepS/)
+  assert.equal(instance.head.length + 5, 35)
+})
+
 test("elapsed buckets seconds, minutes, and hours", () => {
   assert.equal(elapsed(undefined), "")
   assert.equal(elapsed(1_000, 43_000), "42s")
