@@ -52,6 +52,17 @@ Role rows are numbered (` 1.`, `20.` reserved), instance rows are unnumbered. Bo
 
 The model label clips when the row is too tight: the provider keeps at most half of the budget, and the model name takes the rest. One separator cell sits between the model column and the boxes; the boxes are tight against each other. Boxes show throughput in bands: one box at 5 tokens/sec, two at 10, three at 20, four at 50, and five at 100 or more; speeds below 5 fill none. Filled boxes are always green, empty boxes are muted, and an unknown speed is five muted empty boxes. A role-without-instance row always shows empty boxes.
 
+**How to read the boxes.** The boxes show the subagent's measured output speed; each filled box is a step up in real speed, not a proportional fraction.
+
+| boxes | model is producing |
+| --- | --- |
+| ▓ | 5–10 tokens/sec |
+| ▓▓ | 10–20 |
+| ▓▓▓ | 20–50 |
+| ▓▓▓▓ | 50–100 |
+| ▓▓▓▓▓ | 100+ |
+| ░░░░░ | below 5 (or speed still unknown) |
+
 Compact mode keeps the old summary:
 
 ```text
