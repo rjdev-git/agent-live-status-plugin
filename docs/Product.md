@@ -81,8 +81,9 @@ last 5 columns, aligned across rows.
 
 The 5 boxes show the instance's live output speed, not context usage.
 
-- `filled = clamp(round(tps / 20), 0-5)`; `20` tokens/sec fill one box.
-  (Default arbitrated with the human at A.3; one constant, one meaning.)
+- Fill is banded (human decision A.6): 5 boxes at 100 tokens/sec or more,
+  4 at 50, 3 at 20, 2 at 10, 1 at 5, none below. The bands compress the
+  range so slow flash models and fast agents both read visibly.
 - All filled boxes use the theme's success green. No warning ramp — speed
   has no pressure semantics. Unknown speed: empty muted boxes.
 - Speed = output tokens produced divided by the wall time producing them,

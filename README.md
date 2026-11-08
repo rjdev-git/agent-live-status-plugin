@@ -50,7 +50,7 @@ The title counts roles currently working over roles known. The body caps at 10 l
 
 Role rows are numbered (` 1.`, `20.` reserved), instance rows are unnumbered. Both row shapes fill exactly `width` cells, so the bars align vertically.
 
-The model label clips when the row is too tight: the provider keeps at most half of the budget, and the model name takes the rest. One separator cell sits between the model column and the boxes; the boxes are tight against each other. Boxes show throughput: `filled = round(tps / 20)`, so 20 tokens/sec fills one box and 100 fills all five. Filled boxes are always green, empty boxes are muted, and an unknown speed is five muted empty boxes. A role-without-instance row always shows empty boxes.
+The model label clips when the row is too tight: the provider keeps at most half of the budget, and the model name takes the rest. One separator cell sits between the model column and the boxes; the boxes are tight against each other. Boxes show throughput in bands: one box at 5 tokens/sec, two at 10, three at 20, four at 50, and five at 100 or more; speeds below 5 fill none. Filled boxes are always green, empty boxes are muted, and an unknown speed is five muted empty boxes. A role-without-instance row always shows empty boxes.
 
 Compact mode keeps the old summary:
 
@@ -89,7 +89,7 @@ The displayed label follows the format `ProviderName/ModelName`, and appends ` (
 
 The sidebar rows use the short form: the provider's last word (`OpenCode Go` → `Go`) and no variant.
 
-The speed bar is computed from the instance's own assistant messages: output tokens divided by the time they streamed, so it reports tokens per second. Each box is 20 tokens/sec, so 20 fills one box and 100 fills all five. Cumulative session tokens are not used, and a message without both stream timings is skipped, so a session with no measurable message keeps five muted empty boxes instead of a guessed number. A role row's boxes mirror its busiest active instance.
+The speed bar is computed from the instance's own assistant messages: output tokens divided by the time they streamed, so it reports tokens per second. The five boxes fill in bands: 1 box at 5 tokens/sec, 2 at 10, 3 at 20, 4 at 50, 5 at 100 or more, none below 5. Cumulative session tokens are not used, and a message without both stream timings is skipped, so a session with no measurable message keeps five muted empty boxes instead of a guessed number. A role row's boxes mirror its busiest active instance.
 
 The plugin syncs each running subagent session (session and messages) into the TUI data layer when the session appears on the panel or when its execution starts, then re-syncs the session's messages whenever one of its assistant steps ends (or a content update arrives), so the speed bar tracks tokens/sec live. A step end is the trigger the plugin relies on: it carries the final token count for the step. A sync failure surfaces as a host toast, and the affected row shows what is loaded.
 
@@ -151,11 +151,11 @@ Add the plugin in `opencode.jsonc`:
 | `compact` | `boolean` | unset | Forces compact mode (`sub N`) |
 | `width` | `number` | `35` | Cell budget for a sidebar row; the model label clips to fit |
 
-The temporary `debug` option is a diagnostic aid for the current live-data
-investigation: set `debug: true` to append a JSONL record per recompute to
-`/tmp/opencode/subagent-model-debug.jsonl`, or pass a string path to
-override that location. It is not part of the requirements contract and will
-be removed once the investigation ends.
+The `debug` option ships as a diagnostic aid for future investigations:
+`debug: true` enables it and appends a JSONL record per recompute to
+`/tmp/opencode/subagent-model-debug.jsonl`; a string value overrides that
+path. It is off unless enabled, is not part of the requirements contract, and
+is planned for removal once it goes unused.
 
 ## Installation
 

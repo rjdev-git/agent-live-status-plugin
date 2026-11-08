@@ -275,14 +275,14 @@ export const INSTANCE_FIXED_CELLS = 18
 /** One separator cell between the instance model field and the first box glyph. */
 export const INSTANCE_BAR_GAP_CELLS = 1
 
-/** Tokens per second that fills one box. */
-export const TPS_PER_BOX = 20
-
 /** Lower fill clamp: an unknown or negative speed fills no box. */
 export const FILL_MIN_BOXES = 0
 
 /** Upper fill clamp: the bar stops at the box count. */
 export const FILL_MAX_BOXES = 5
+
+/** Band floors in tokens/sec, ascending; a band's 1-based position is its box count. */
+export const FILL_BANDS: ReadonlyArray<number> = [5, 10, 20, 50, 100]
 
 /** Grace window for a failed or interrupted instance row, in milliseconds. */
 export const GRACE_MS = 30_000
@@ -457,10 +457,10 @@ type Section = {
 /** Speed tone: filled boxes are success green, empty boxes are muted (C21). */
 export type BarTone = "success" | "muted"
 
-/** Boxes filled by `tps`, half-up (`floor(x + 0.5)`) and clamped. */
+/** Boxes filled by `tps`: the bands it reaches, clamped (C19). */
 export function barFill(tps: number | undefined): number {
   if (tps === undefined || !Number.isFinite(tps)) return FILL_MIN_BOXES
-  const filled = Math.floor(tps / TPS_PER_BOX + 0.5)
+  const filled = FILL_BANDS.filter((band) => tps >= band).length
   return Math.min(FILL_MAX_BOXES, Math.max(FILL_MIN_BOXES, filled))
 }
 

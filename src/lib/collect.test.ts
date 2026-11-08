@@ -7,6 +7,7 @@ import {
   BODY_MAX_LINES,
   DEFAULT_WIDTH,
   ELLIPSIS_CELLS,
+  FILL_BANDS,
   FILL_MAX_BOXES,
   FILL_MIN_BOXES,
   GRACE_MS,
@@ -27,7 +28,6 @@ import {
   ROLE_NAME_GAP_CELLS,
   ROLE_NUMBER_CELLS,
   ROLE_NUMBER_DIGITS,
-  TPS_PER_BOX,
   UNKNOWN_MODEL,
   barFill,
   barTone,
@@ -777,33 +777,42 @@ test("F21 above width 35 the instance text stays 12 cells and the column pads", 
 test("C16 FILL_MIN_BOXES = 0 clamps the lower edge", () => {
   assert.equal(FILL_MIN_BOXES, 0)
   assert.equal(barFill(0), 0)
-  assert.equal(barFill(9), 0)
+  assert.equal(barFill(4.99), 0)
   assert.equal(barFill(-1), 0)
 })
 
 test("C17 FILL_MAX_BOXES = 5 clamps the upper edge", () => {
   assert.equal(FILL_MAX_BOXES, 5)
   assert.equal(barFill(1000), 5)
-  assert.equal(barFill(89), 4)
+  assert.equal(barFill(99.99), 4)
 })
 
-test("C18 TPS_PER_BOX = 20 fills one box", () => {
-  assert.equal(TPS_PER_BOX, 20)
-  assert.equal(barFill(20), 1)
-  assert.equal(barFill(19), 1)
-  // 29 still needs 30 for two boxes.
-  assert.equal(barFill(29), 1)
+test("C18 FILL_BANDS = [5, 10, 20, 50, 100] fills one box at its lowest floor", () => {
+  assert.deepEqual(FILL_BANDS, [5, 10, 20, 50, 100])
+  assert.equal(barFill(5), 1)
+  assert.equal(barFill(4.99), 0)
 })
 
-test("C19 the fill formula is half-up and clamped", () => {
-  assert.equal(barFill(10), 1)
-  assert.equal(barFill(30), 2)
-  assert.equal(barFill(50), 3)
-  assert.equal(barFill(90), 5)
-  assert.equal(barFill(9), 0)
-  assert.equal(barFill(29), 1)
-  assert.equal(barFill(89), 4)
+test("C19 the fill formula counts the bands reached and clamps", () => {
+  assert.equal(barFill(5), 1)
+  assert.equal(barFill(10), 2)
+  assert.equal(barFill(20), 3)
+  assert.equal(barFill(50), 4)
+  assert.equal(barFill(100), 5)
+  assert.equal(barFill(4.99), 0)
+  assert.equal(barFill(9.99), 1)
+  assert.equal(barFill(19.99), 2)
+  assert.equal(barFill(49.99), 3)
+  assert.equal(barFill(99.99), 4)
+  // Live sanity points from the R6 diagnostic (D1).
+  assert.equal(barFill(5.59), 1)
+  assert.equal(barFill(14.04), 2)
   assert.equal(barFill(undefined), 0)
+})
+
+test("fill stays inside the bar: 0 boxes at the low extreme, BAR_CELLS at the high", () => {
+  assert.equal(barFill(0), 0)
+  assert.equal(barFill(1000), BAR_CELLS)
 })
 
 test("C20 tps formula sums tokens over the summed stream window", () => {
@@ -827,10 +836,11 @@ test("C20 tps formula sums tokens over the summed stream window", () => {
 })
 
 test("C21 barTone is single green or muted", () => {
-  assert.equal(barTone(barFill(10)), "success")
+  assert.equal(barTone(barFill(5)), "success")
   assert.equal(barTone(barFill(300)), "success")
   // Five boxes never take a warning or error tone.
   assert.equal(barTone(barFill(1000)), "success")
+  assert.equal(barTone(barFill(4.99)), "muted")
   assert.equal(barTone(barFill(undefined)), "muted")
   for (const filled of [0, 1, 2, 3, 4, 5]) {
     const tone = barTone(filled)
@@ -1006,11 +1016,11 @@ test("role row carries the busiest active instance tps and fill (G13)", () => {
 
   const view = panel(sources, "root", 35, BODY_MAX_LINES, NOW)
   assert.equal(view.rows[0].tps, 60)
-  assert.equal(view.rows[0].filled, 3)
+  assert.equal(view.rows[0].filled, 4)
   assert.equal(view.rows[1].tps, 20)
-  assert.equal(view.rows[1].filled, 1)
+  assert.equal(view.rows[1].filled, 3)
   assert.equal(view.rows[2].tps, 60)
-  assert.equal(view.rows[2].filled, 3)
+  assert.equal(view.rows[2].filled, 4)
 })
 
 test("role row keeps the known tps when the other instance is unknown (G13)", () => {
@@ -1027,11 +1037,11 @@ test("role row keeps the known tps when the other instance is unknown (G13)", ()
 
   const view = panel(sources, "root", 35, BODY_MAX_LINES, NOW)
   assert.equal(view.rows[0].tps, 40)
-  assert.equal(view.rows[0].filled, 2)
+  assert.equal(view.rows[0].filled, 3)
   assert.equal(view.rows[1].tps, undefined)
   assert.equal(view.rows[1].filled, 0)
   assert.equal(view.rows[2].tps, 40)
-  assert.equal(view.rows[2].filled, 2)
+  assert.equal(view.rows[2].filled, 3)
 })
 
 test("F18 a grace instance and its role show empty boxes", () => {
@@ -1214,7 +1224,7 @@ test("speed bar follows the separator at width 35 (filled = 3)", () => {
         { id: "i", parentID: "root", agent: "explore", title: "x", time: { created: NOW } },
       ],
       ["i"],
-      { i: [assistant(50, 0, 1_000)] },
+      { i: [assistant(30, 0, 1_000)] },
     ),
     agents: [agent("explore", "explore", { model: { id: "kimi", providerID: "go" } })],
     models: [{ id: "kimi", modelID: "kimi", providerID: "go", name: "Kimi K3.1 Pro" }],
