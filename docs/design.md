@@ -486,7 +486,7 @@ host source at render time.
 | `context.storage.store("opencode-subagent-model")` | persisted `{ compact }` | R10 |
 | slot input `sessionID` | viewed session id | R3 tab scope; compact count scope |
 | `context.ui.router.current()` | current route | session context for opening a picked session; not used to scope the picker (F9) |
-| host events (`session.created/deleted/moved/forked/renamed/status/idle/agent.selected/model.selected/execution.started/succeeded/failed/interrupted`, plus `session.message.content.updated`) | invalidation; on `session.created` and `session.execution.started` also a sync trigger, on `session.message.content.updated` a message re-sync trigger (G16) | bump the view signal; load the instance session then its messages; re-read messages after a new one arrives |
+| host events (`session.created/deleted/moved/forked/renamed/status/idle/agent.selected/model.selected/execution.started/succeeded/failed/interrupted`, plus `session.step.ended` and `session.message.content.updated`) | invalidation; on `session.created` and `session.execution.started` also a sync trigger, on `session.step.ended` a message re-sync trigger (known-fire: final `tokens` per completed assistant step), on `session.message.content.updated` a second re-sync trigger (delivery unverified; G16) | bump the view signal; load the instance session then its messages; re-read messages when an assistant step ends |
 | 1 s ticker | clock while a grace row exists; doubles as a recompute trigger for `tps` (R6) | recompute `now` for grace expiry and re-run `panel()` |
 
 Location: the location the TUI is showing (`context.location`, else
@@ -507,10 +507,19 @@ collects:
 - `session.execution.started` or `session.created` for a child session with a
   visible role → `context.data.session.sync(sessionID)` first, then
   `context.data.session.message.sync(sessionID)` once the session is loaded.
+- `session.step.ended` for an instance session → re-sync its messages
+  (`resyncMessages`, same call site) so the final `tokens.output` of each
+  completed assistant step reaches the cache before the next `panel()` pass.
+  This is the **known-fire** trigger: the event is a typed `V2Event` member and
+  fires per completed assistant step with
+  `data: { sessionID, assistantMessageID, tokens }` (G16).
 - `session.message.content.updated` for an instance session → re-sync its
-  messages so a newly arrived message reaches the cache before the next
-  `panel()` pass. The once-per-session `syncedSessions` guard blocks that
-  re-sync today (G16).
+  messages on the same path. This trigger is **belt-and-braces**: the typed
+  `on` map does not expose the event and its delivery to a plugin listener is
+  unverified, so it is kept as a second net and `session.step.ended` is the
+  trigger the design relies on (G16).
+- Both re-sync paths bypass the once-per-session `syncedSessions` guard: that
+  guard exists to stop repeated session loads, not to stop message refreshes.
 - The sync is a host call with a side effect and lives in `src/tui.tsx`, not
   in the pure layer (R12); no cache entry is invalidated by hand.
 - Sync failure is not a panel failure: it follows R11 (toast, last good view),
@@ -775,15 +784,21 @@ Coder task; findings and fixes reference these IDs.
   later sections, which can show a lower-priority role after a folded
   higher-priority one. The design stops the body at the first non-fitting
   section (F5).
-- **G16 (R6, §2 availability) — survives, re-scoped to speed.** The sync path
-  now exists (`syncSession`, `src/tui.tsx:92-108`) and loads the session, then
-  its messages, then bumps the view. Its `syncedSessions` guard makes it
-  once-per-session, so messages that arrive after the first sync never reach
-  the cache and `tps` freezes at whatever the first load contained. The design
-  keeps the same wiring and adds one trigger: on
-  `session.message.content.updated` for an instance session, re-sync its
-  messages (no session re-sync, no new timer) and bump. Host-call side effect:
-  verified in review by inspection, not by a pure-layer fixture (R12).
+- **G16 (R6, §2 availability) — survives, re-scoped to speed; two triggers.**
+  The sync path exists (`syncSession` / `resyncMessages`, `src/tui.tsx:92-108`)
+  and loads the session, then its messages, then bumps the view. Its
+  `syncedSessions` guard makes the session load once-per-session, so messages
+  that arrive after the first sync never reach the cache and `tps` freezes at
+  whatever the first load contained. The design keeps the same wiring and adds
+  a message re-sync (no session re-sync, no new timer) on two triggers:
+  `session.step.ended` — the typed `V2Event` member that fires per completed
+  assistant step with final tokens
+  (`data: { sessionID, assistantMessageID, tokens }`), so it is the
+  **known-fire** trigger — and `session.message.content.updated` — kept as
+  **belt-and-braces** because the typed map does not expose it and its delivery
+  is unverified. `session.step.ended` is the trigger the design relies on.
+  Both bypass the once-per-session guard. Host-call side effect: verified in
+  review by inspection, not by a pure-layer fixture (R12).
 - **G17 (R6)** — The speed computation does not exist. `lastUsage`
   (`src/lib/collect.ts:157-165`) and `contextPct` (`:167-179`) read the newest
   token report over `limit.context`; `contextLimit` (`:148-155`) finds the
@@ -796,7 +811,8 @@ Coder task; findings and fixes reference these IDs.
   `contextLimit`, `contextPct`, `lastUsage`, `PERCENT`, `WARNING_MIN_PCT`,
   `ERROR_MIN_PCT`, `BAR_MIN_FILL`, `row.pct` and `RunningSubagent.pct` are
   deleted. Recompute triggers: any watched host event (already bumps the
-  signal), `session.message.content.updated` after its re-sync (G16), and the
+  signal), `session.step.ended` and `session.message.content.updated` after
+  their re-sync (G16), and the
   existing 1 s ticker (`src/tui.tsx:198-202`) while it runs — speed itself
   never reads `now`, so a tick without new message data is a no-op.
 - **G18 (R6)** — Box colour is a three-band ramp: `barColor`

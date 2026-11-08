@@ -15,14 +15,14 @@ It is especially useful when you use different models for your main agent and su
 ## Why use it
 
 - The whole subagent team is visible all the time: working roles in colour, idle roles in grey
-- Working instances nest under their role like subfolders, each with its own model and context bar
+- Working instances nest under their role like subfolders, each with its own model and speed bar
 - Browse all active subagents from one searchable picker
 - Open any subagent session directly from the UI
 - Keep the status compact when you want less visual noise
 
 ## Example output
 
-A tree of agent roles. A role shows the agent definition; every running instance nests under it with its session title, model, and context bar:
+A tree of agent roles. A role shows the agent definition; every running instance nests under it with its session title, model, and speed bar:
 
 ```text
 Project Team Members 1/5
@@ -50,7 +50,7 @@ The title counts roles currently working over roles known. The body caps at 10 l
 
 Role rows are numbered (` 1.`, `20.` reserved), instance rows are unnumbered. Both row shapes fill exactly `width` cells, so the bars align vertically.
 
-The model label clips when the row is too tight: the provider keeps at most half of the budget, and the model name takes the rest. Boxes show how full the model context window is: `filled = round(pct × 5 / 100)`. Bar boxes are green below 50%, yellow from 50%, red from 70%, independent of the row text colour. A role-without-instance row always shows empty boxes.
+The model label clips when the row is too tight: the provider keeps at most half of the budget, and the model name takes the rest. The boxes sit tight against the model column — no gap cell — so the freed cell belongs to the model field. Boxes show throughput: `filled = round(tps / 20)`, so 20 tokens/sec fills one box and 100 fills all five. Filled boxes are always green, empty boxes are muted, and an unknown speed is five muted empty boxes. A role-without-instance row always shows empty boxes.
 
 Compact mode keeps the old summary:
 
@@ -61,7 +61,7 @@ sub 3
 ## Features
 
 - Live team tree in the session UI (`sidebar.content` by default)
-- Role rows with configured model, instance rows with live model and context
+- Role rows with configured model, instance rows with live model and speed
 - `/subagents` command and `/subagent-models` alias
 - Palette command: `Show running subagent models`
 - Palette command: `Toggle compact subagent status`
@@ -89,9 +89,9 @@ The displayed label follows the format `ProviderName/ModelName`, and appends ` (
 
 The sidebar rows use the short form: the provider's last word (`OpenCode Go` → `Go`) and no variant.
 
-The context indicator reads the newest message that reports token usage and divides its prompt size (`input + cache read`) by the model's context limit. Cumulative session tokens are not used: they never fall after compaction, so the bar would never recover. A role row's box shows the fill of its busiest instance.
+The speed bar is computed from the instance's own assistant messages: output tokens divided by the time they streamed, so it reports tokens per second. Each box is 20 tokens/sec, so 20 fills one box and 100 fills all five. Cumulative session tokens are not used, and a message without both stream timings is skipped, so a session with no measurable message keeps five muted empty boxes instead of a guessed number. A role row's boxes mirror its busiest active instance.
 
-The plugin syncs each running subagent session (session and messages) into the TUI data layer when the session appears on the panel or when its execution starts, so the context bar can read the newest message's token usage for sessions other than the one you are viewing. A sync failure surfaces as a host toast, and the affected row shows what is loaded. If the resolved model has no `limit.context` in the catalog, the bar renders as unknown usage (empty muted boxes): the plugin never invents a fallback limit.
+The plugin syncs each running subagent session (session and messages) into the TUI data layer when the session appears on the panel or when its execution starts, then re-syncs the session's messages whenever one of its assistant steps ends (or a content update arrives), so the speed bar tracks tokens/sec live. A step end is the trigger the plugin relies on: it carries the final token count for the step. A sync failure surfaces as a host toast, and the affected row shows what is loaded.
 
 ## Commands
 

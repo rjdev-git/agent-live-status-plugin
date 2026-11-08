@@ -9,7 +9,7 @@ import {
   BODY_MAX_LINES,
   DEFAULT_WIDTH,
   GRACE_TICK_MS,
-  barBand,
+  barTone,
   collect,
   elapsed,
   filterRows,
@@ -107,6 +107,25 @@ async function syncSession(context: Context, sessionID: string, bump: () => void
   }
 }
 
+/**
+ * Re-reads one instance's messages after a content update. The once-per-session
+ * `syncedSessions` guard must not suppress this re-sync, so it takes its own
+ * path: no session re-sync, no new timer (G16). Best effort like `syncSession`.
+ */
+async function resyncMessages(context: Context, sessionID: string, bump: () => void) {
+  try {
+    await context.data.session.message.sync(sessionID)
+    bump()
+    lastSyncFailure = undefined
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (message !== lastSyncFailure) {
+      lastSyncFailure = message
+      context.ui.toast.show({ message })
+    }
+  }
+}
+
 /** R3, §2: only a child session whose agent names a visible role is synced. */
 function isVisibleChild(
   agents: AgentInfo[] | undefined,
@@ -117,18 +136,9 @@ function isVisibleChild(
   return agent !== undefined && isVisibleRole(agent)
 }
 
-/** Box colour: the pure band result mapped onto the theme. */
-function barColor(theme: ResolvedTheme, pct: number | undefined) {
-  switch (barBand(pct)) {
-    case "success":
-      return theme.text.feedback.success.base
-    case "warning":
-      return theme.text.feedback.warning.base
-    case "error":
-      return theme.text.feedback.error.base
-    default:
-      return theme.text.muted
-  }
+/** Box colour: the pure single-tone result mapped onto the theme (R6, C21). */
+function barColor(theme: ResolvedTheme, filled: number) {
+  return barTone(filled) === "success" ? theme.text.feedback.success.base : theme.text.muted
 }
 
 /** Row text colour: grey idle, warning in the failure grace, else agent colour. */
@@ -225,7 +235,7 @@ function Status(props: {
                   <>
                     <br />
                     <Seg fg={rowColor(theme, row)}>{row.head}</Seg>
-                    <Seg fg={barColor(theme, row.pct)}>{FILL.repeat(row.filled)}</Seg>
+                    <Seg fg={barColor(theme, row.filled)}>{FILL.repeat(row.filled)}</Seg>
                     <Seg fg={theme.text.muted}>{EMPTY.repeat(BAR_CELLS - row.filled)}</Seg>
                   </>
                 )}
@@ -328,6 +338,28 @@ export default Plugin.define({
         const session = context.data.session.get(event.data.sessionID)
         if (!isVisibleChild(sources(context).agents, session)) return
         void syncSession(context, event.data.sessionID, bump)
+      }),
+      // A step ending finalises `tokens.output`, so the speed bar's data is
+      // stale until the instance's messages are re-read. Same gate as above:
+      // root and unknown-agent sessions never reach the data layer (G16).
+      context.data.on("session.step.ended", (event) => {
+        const session = context.data.session.get(event.data.sessionID)
+        if (!isVisibleChild(sources(context).agents, session)) return
+        void resyncMessages(context, event.data.sessionID, bump)
+      }),
+      // Belt-and-braces trigger: a new message must reach the cache before the
+      // next panel pass; the once-per-session guard above is deliberately
+      // bypassed (G16). The typed `on` map does not expose this host event, so
+      // it arrives here; delivery is unverified, so `session.step.ended` above
+      // is the trigger that is known to fire.
+      context.data.listen((event) => {
+        const details = event.details as { type: string; data?: { sessionID?: string } }
+        if (details.type !== "session.message.content.updated") return
+        const sessionID = details.data?.sessionID
+        if (!sessionID) return
+        const session = context.data.session.get(sessionID)
+        if (!isVisibleChild(sources(context).agents, session)) return
+        void resyncMessages(context, sessionID, bump)
       }),
     ]
 

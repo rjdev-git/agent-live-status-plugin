@@ -2,14 +2,13 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import {
   BAR_CELLS,
-  BAR_MIN_FILL,
   BODY_MAX_LINES,
   DEFAULT_WIDTH,
   ELLIPSIS_CELLS,
-  ERROR_MIN_PCT,
+  FILL_MAX_BOXES,
+  FILL_MIN_BOXES,
   GRACE_MS,
   GRACE_TICK_MS,
-  INSTANCE_BAR_GAP_CELLS,
   INSTANCE_FIXED_CELLS,
   INSTANCE_INDENT_CELLS,
   INSTANCE_MODEL_CELLS,
@@ -17,24 +16,21 @@ import {
   INSTANCE_TITLE_GAP_CELLS,
   PICKER_AGENT_CELLS,
   PICKER_MODEL_CELLS,
-  PERCENT,
   PROVIDER_MAX_SHARE,
-  ROLE_BAR_GAP_CELLS,
   ROLE_FIXED_CELLS,
   ROLE_MODEL_MAX_CELLS,
   ROLE_NAME_CELLS,
   ROLE_NAME_GAP_CELLS,
   ROLE_NUMBER_CELLS,
   ROLE_NUMBER_DIGITS,
+  TPS_PER_BOX,
   UNKNOWN_MODEL,
-  WARNING_MIN_PCT,
-  barBand,
   barFill,
+  barTone,
   cellWidth,
   cleanTitle,
   clip,
   collect,
-  contextPct,
   elapsed,
   fitModel,
   filterRows,
@@ -44,6 +40,7 @@ import {
   matches,
   pickerTitle,
   resolveModel,
+  speedTps,
   type AgentInfo,
   type RunningSubagent,
   type SessionInfo,
@@ -51,10 +48,32 @@ import {
   type Sources,
 } from "./collect.ts"
 
+/** One message fixture, shaped like the host's assistant messages (R6, §2). */
+type TestMessage = {
+  type?: string
+  tokens?: { output?: number }
+  time?: { created?: number; streamed?: number; completed?: number }
+}
+
+/** One counted assistant message: `ms = completed - streamed`. */
+function assistant(
+  output: number,
+  streamed: number,
+  completed: number,
+  extra: Partial<TestMessage> = {},
+): TestMessage {
+  return {
+    type: "assistant",
+    tokens: { output },
+    time: { created: streamed, streamed, completed },
+    ...extra,
+  }
+}
+
 function fakeSessions(
   sessions: SessionInfo[],
   running: string[] = [],
-  messages: Record<string, Array<{ tokens?: { input: number; cache?: { read?: number } } }>> = {},
+  messages: Record<string, ReadonlyArray<TestMessage>> = {},
 ): SessionSource {
   const byID = new Map(sessions.map((session) => [session.id, session]))
   return {
@@ -100,9 +119,10 @@ function rootSources(
   sessions: SessionInfo[],
   agents: AgentInfo[],
   running: string[] = [],
+  messages: Record<string, ReadonlyArray<TestMessage>> = {},
 ): Sources {
   return {
-    sessions: fakeSessions([{ id: "root" }, ...sessions], running),
+    sessions: fakeSessions([{ id: "root" }, ...sessions], running, messages),
     agents,
     models,
     providers,
@@ -132,48 +152,24 @@ test("short labeler keeps the provider's last word and drops the variant", () =>
   assert.equal(label({ id: "kimi", providerID: "go", variant: "high" }), "Go/Kimi K3.1 Pro")
 })
 
-test("contextPct uses the newest usage over the model context limit", () => {
-  const sources: Sources = {
-    sessions: fakeSessions(
-      [{ id: "child", parentID: "root", model: { id: "deepseek-flash", providerID: "deepseek" } }],
-      ["child"],
-      { child: [{ tokens: { input: 10 } }, { tokens: { input: 100_000, cache: { read: 28_000 } } }] },
-    ),
-    models: [{ ...models[0], limit: { context: 256_000 } }],
-    providers,
-  }
-  const row = collect(sources)[0]
-  assert.equal(Math.round(row.pct!), 50)
-  assert.equal(row.modelShort, "DeepSeek/DeepSeek Flash")
-  assert.equal(contextPct(sources.sessions.list()[0], sources), 50)
-})
-
-test("contextPct is unknown without a usage or a model limit", () => {
-  const base = { id: "child", model: { id: "deepseek-flash", providerID: "deepseek" } }
-  const noLimit: Sources = {
-    sessions: fakeSessions([base], [], { child: [{ tokens: { input: 1_000 } }] }),
-    models,
-  }
-  assert.equal(contextPct(noLimit.sessions.list()[0], noLimit), undefined)
-
-  const noUsage: Sources = {
-    sessions: fakeSessions([base]),
-    models: [{ ...models[0], limit: { context: 256_000 } }],
-  }
-  assert.equal(contextPct(noUsage.sessions.list()[0], noUsage), undefined)
-})
-
-test("contextPct reports over-limit usage unclamped", () => {
-  const sources: Sources = {
-    sessions: fakeSessions(
-      [{ id: "child", model: { id: "deepseek-flash", providerID: "deepseek" } }],
-      [],
-      { child: [{ tokens: { input: 300_000 } }] },
-    ),
-    models: [{ ...models[0], limit: { context: 256_000 } }],
-  }
-  // 300000 / 256000 * 100 = 117.1875; only the fill clamps (G8).
-  assert.equal(contextPct(sources.sessions.list()[0], sources), 117.1875)
+test("speedTps uses only assistant messages with a measured stream window", () => {
+  assert.equal(speedTps([assistant(200, 1000, 2000)]), 200)
+  // Skipped whole: no tokens, no timing, a backwards window, or a wrong type.
+  assert.equal(speedTps([{ type: "assistant", time: { created: 0, streamed: 0, completed: 1_000 } }]), undefined)
+  assert.equal(speedTps([{ type: "assistant", tokens: { output: 200 } }]), undefined)
+  assert.equal(speedTps([assistant(200, 1000, 500)]), undefined)
+  assert.equal(speedTps([{ ...assistant(200, 0, 1_000), type: "user" }]), undefined)
+  // streamed must be at or after created.
+  assert.equal(
+    speedTps([
+      { type: "assistant", tokens: { output: 200 }, time: { created: 1_000, streamed: 500, completed: 2_000 } },
+    ]),
+    undefined,
+  )
+  // A counted zero-output message is a known 0, not unknown.
+  assert.equal(speedTps([assistant(0, 0, 1_000)]), 0)
+  // An invalid message contributes neither tokens nor time.
+  assert.equal(speedTps([assistant(100, 0, 1_000), assistant(900, 1_000, 500)]), 100)
 })
 
 test("resolveModel prefers the session model", () => {
@@ -258,7 +254,7 @@ test("fitModel gives the provider half at most and the model the rest", () => {
   assert.equal(fitModel("NoSlashModelNameLongerThanBudget", 16), "NoSlashModelNam…")
 })
 
-test("instance rows show an 8-cell title and a 12-cell model", () => {
+test("instance rows show an 8-cell title and a 13-cell model", () => {
   const NOW = 1_000_000
   const sources: Sources = {
     sessions: fakeSessions(
@@ -282,8 +278,7 @@ test("instance rows show an 8-cell title and a 12-cell model", () => {
 
   const view = panel(sources, "root", 35, 10, NOW)
   const instance = view.rows.find((row) => row.head.startsWith(" └"))!
-  assert.equal(instance.head.startsWith(" └ Inspect… "), true)
-  assert.match(instance.head, /Deep/)
+  assert.equal(instance.head, " └ Inspect… Deep…/DeepSe…     ")
   assert.equal(cellWidth(instance.head) + 5, 35)
 })
 
@@ -384,7 +379,8 @@ test("panel falls back to the agent or session model for the role row", () => {
   assert.match(view.rows[0].head, /DeepSe/)
 })
 
-test("filterRows matches agent, model, and title case-insensitively", () => {  const rows = [
+test("filterRows matches agent, model, and title case-insensitively", () => {
+  const rows = [
     { sessionID: "ses_1", agent: "explore", model: "DeepSeek/Flash", title: "Inspect repo" },
     { sessionID: "ses_2", agent: "general", model: "OpenAI/GPT", title: "Write tests" },
   ]
@@ -411,7 +407,7 @@ test("matches spans every field and ignores case and padding", () => {
 })
 
 /* ------------------------------------------------------------------ */
-/* §6 contract numbers, C1-C27, each with a fits and a does-not-fit side. */
+/* §6 contract numbers, C1-C29, each with a fits and a does-not-fit side. */
 /* ------------------------------------------------------------------ */
 
 function runningRole(id: string, name: string, count: number, start: number) {
@@ -462,7 +458,9 @@ test("C3 ROLE_NUMBER_DIGITS = 2", () => {
   const agents = Array.from({ length: 10 }, (_, index) => agent(`a${index}`, `A${index}`))
   const view = panel(rootSources([], agents), undefined, 35, BODY_MAX_LINES, 0)
   assert.equal(view.rows[8].head.slice(0, 3), " 9.")
+  // The tenth role is the highest emitted number: the body cap stops at 10.
   assert.equal(view.rows[9].head.slice(0, 3), "10.")
+  assert.equal(view.rows.length, 10)
 })
 
 test("C4 ROLE_NUMBER_CELLS = 3", () => {
@@ -482,6 +480,7 @@ test("C5 ROLE_NAME_CELLS = 9 clips names with an ellipsis", () => {
   assert.equal(nameAt("explore"), "explore  ")
   assert.equal(nameAt("123456789"), "123456789")
   assert.equal(nameAt("1234567890"), "12345678…")
+  // Hostile width: a 10-cell wide name must still fit the 9-cell field.
   assert.equal(clip("调研团队组", ROLE_NAME_CELLS), "调研团队…")
   const wideHead = panel(rootSources([], [agent("a", "调研团队组")]), undefined, 35, BODY_MAX_LINES, 0).rows[0].head
   assert.equal(wideHead.startsWith(" 1.调研团队…"), true)
@@ -490,9 +489,19 @@ test("C5 ROLE_NAME_CELLS = 9 clips names with an ellipsis", () => {
 
 test("C6 ROLE_NAME_GAP_CELLS = 1 keeps the gap column clear", () => {
   assert.equal(ROLE_NAME_GAP_CELLS, 1)
-  const head = panel(rootSources([], [agent("a", "1234567890")]), undefined, 35, BODY_MAX_LINES, 0).rows[0].head
+  const sources: Sources = {
+    sessions: fakeSessions([{ id: "root" }]),
+    agents: [agent("explore", "explore", { model: { id: "kimi", providerID: "go" } })],
+    models: [{ id: "kimi", modelID: "kimi", providerID: "go", name: "Kimi K3.1 Pro" }],
+    providers: [{ id: "go", name: "OpenCode Go" }],
+  }
+  const head = panel(sources, undefined, 35, BODY_MAX_LINES, 0).rows[0].head
+  assert.equal(head, " 1.explore   Go/Kimi K3.1 Pro ")
+  assert.equal(cellWidth(head), 30)
+  // Column 13 is the gap: a gap-less row would start the model there.
   assert.equal(head[12], " ")
-  assert.equal(head.slice(3, 12), "12345678…")
+  assert.notEqual(head, " 1.explore  Go/Kimi K3.1 Pro  ")
+  assert.equal(cellWidth(" 1.explore  Go/Kimi K3.1 Pro  "), 30)
 })
 
 test("C7 ROLE_MODEL_MAX_CELLS = 20 caps the role label text", () => {
@@ -504,41 +513,73 @@ test("C7 ROLE_MODEL_MAX_CELLS = 20 caps the role label text", () => {
   assert.equal(twentyOne.rows[0].head.slice(13, 33), "P/12345678901234567…")
 })
 
-test("C8 ROLE_FIXED_CELLS = 19 leaves the model column and raises narrow widths", () => {
-  assert.equal(ROLE_FIXED_CELLS, 19)
+test("C8 ROLE_FIXED_CELLS = 18 leaves the model column and raises narrow widths", () => {
+  assert.equal(ROLE_FIXED_CELLS, 18)
   const at19 = panel(rootSources([], [agent("a", "A")]), undefined, 19, BODY_MAX_LINES, 0)
   assert.equal(cellWidth(at19.rows[0].head), 14)
+  assert.equal(cellWidth(at19.rows[0].head.slice(13)), 1)
 
   const at18 = panel(rootSources([], [agent("a", "A")]), undefined, 18, BODY_MAX_LINES, 0)
   assert.equal(cellWidth(at18.rows[0].head), 14)
 })
 
-test("C9 ROLE_BAR_GAP_CELLS = 1 keeps one cell before the boxes", () => {
-  assert.equal(ROLE_BAR_GAP_CELLS, 1)
-  const head = panel(rootSources([], [agent("a", "A")]), undefined, 35, BODY_MAX_LINES, 0).rows[0].head
-  assert.equal(head[35 - 6], " ")
-  assert.equal(head.at(-1), " ")
-})
-
-test("C10 BAR_CELLS = 5 boxes", () => {
+test("C9 BAR_CELLS = 5 boxes", () => {
   assert.equal(BAR_CELLS, 5)
-  assert.equal(barFill(100), 5)
-  assert.equal(barFill(0), 0)
+  assert.equal(barFill(1000), BAR_CELLS)
+  assert.equal(barFill(undefined), 0)
+  assert.equal(BAR_CELLS - barFill(undefined), 5)
 })
 
-test("C11 INSTANCE_INDENT_CELLS = 3 with the tree glyphs", () => {
+test("C10 INSTANCE_INDENT_CELLS = 3 with the tree glyphs", () => {
   assert.equal(INSTANCE_INDENT_CELLS, 3)
-  const role = runningRole("aa", "Alpha", 2, 100)
-  const view = panel(rootSources(role.sessions, [role.agent], role.running), "root", 35, BODY_MAX_LINES, 0)
-  assert.equal(view.rows[1].head.slice(0, 3), " ├ ")
-  assert.equal(view.rows[2].head.slice(0, 3), " └ ")
+  const sources: Sources = {
+    sessions: fakeSessions(
+      [
+        { id: "root" },
+        {
+          id: "i1",
+          parentID: "root",
+          agent: "a",
+          title: "Inspect modules",
+          model: { id: "grok47", providerID: "go" },
+          time: { created: 100 },
+        },
+        {
+          id: "i2",
+          parentID: "root",
+          agent: "a",
+          title: "Inspect modules",
+          model: { id: "grok47", providerID: "go" },
+          time: { created: 200 },
+        },
+      ],
+      ["i1", "i2"],
+    ),
+    agents: [agent("a", "A")],
+    models: [{ id: "grok47", modelID: "grok47", providerID: "go", name: "Grok 4.7" }],
+    providers: [{ id: "go", name: "OpenCode Go" }],
+  }
+  const view = panel(sources, "root", 35, BODY_MAX_LINES, 0)
+  const first = view.rows[1].head
+  const last = view.rows[2].head
+  assert.equal(first, " ├ Inspect… Go/Grok 4.7       ")
+  assert.equal(cellWidth(first), 30)
+  assert.equal(first.slice(0, 3), " ├ ")
+  assert.equal(first[3], "I")
+  assert.equal(last, " └ Inspect… Go/Grok 4.7       ")
+  // Both failure directions: └ on a non-last row, ├ on the last row.
+  assert.notEqual(first.slice(0, 3), " └ ")
+  assert.notEqual(last.slice(0, 3), " ├ ")
+  // A two-cell indent would shift the title into the glyph column.
+  assert.notEqual(first.slice(0, 3), " ├I")
 })
 
-test("C12 INSTANCE_TITLE_CELLS = 8 clips title text", () => {
+test("C11 INSTANCE_TITLE_CELLS = 8 clips title text", () => {
   assert.equal(INSTANCE_TITLE_CELLS, 8)
   assert.equal(clip("Inspect modules", 8), "Inspect…")
   assert.equal(clip("abcdefgh", 8), "abcdefgh")
   assert.equal(clip("abcdefghi", 8), "abcdefg…")
+  // Hostile width: a 10-cell wide title clips to 7 cells.
   assert.equal(clip("调研团队组", 8), "调研团…")
 
   const role = runningRole("aa", "Alpha", 1, 100)
@@ -547,7 +588,7 @@ test("C12 INSTANCE_TITLE_CELLS = 8 clips title text", () => {
   assert.equal(view.rows[1].head.slice(3, 11), "abcdefg…")
 })
 
-test("C13 INSTANCE_TITLE_GAP_CELLS = 1 after the title field", () => {
+test("C12 INSTANCE_TITLE_GAP_CELLS = 1 after the title field", () => {
   assert.equal(INSTANCE_TITLE_GAP_CELLS, 1)
   const role = runningRole("aa", "Alpha", 1, 100)
   const session = { ...role.sessions[0], title: "abcdefghi" }
@@ -556,11 +597,11 @@ test("C13 INSTANCE_TITLE_GAP_CELLS = 1 after the title field", () => {
   assert.equal(view.rows[1].head.slice(3, 11), "abcdefg…")
 })
 
-test("C14 INSTANCE_MODEL_CELLS = 12 uses the split rule", () => {
-  assert.equal(INSTANCE_MODEL_CELLS, 12)
-  assert.equal(fitModel("OpenCode/Kimi K3.1 Pro", 12), "Open…/Kimi …")
-  assert.equal(clip("OpenCode/Kimi K3.1 Pro", 12), "OpenCode/Ki…")
-  assert.notEqual(fitModel("OpenCode/Kimi K3.1 Pro", 12), clip("OpenCode/Kimi K3.1 Pro", 12))
+test("C13 INSTANCE_MODEL_CELLS = 13 uses the split rule", () => {
+  assert.equal(INSTANCE_MODEL_CELLS, 13)
+  assert.equal(fitModel("OpenCode/Kimi K3.1 Pro", 13), "Open…/Kimi K…")
+  assert.equal(clip("OpenCode/Kimi K3.1 Pro", 13), "OpenCode/Kim…")
+  assert.notEqual(fitModel("OpenCode/Kimi K3.1 Pro", 13), clip("OpenCode/Kimi K3.1 Pro", 13))
 
   const sources: Sources = {
     sessions: fakeSessions(
@@ -582,53 +623,175 @@ test("C14 INSTANCE_MODEL_CELLS = 12 uses the split rule", () => {
     providers: [{ id: "opencode", name: "OpenCode" }],
   }
   const view = panel(sources, "root", 35, BODY_MAX_LINES, 0)
-  assert.equal(view.rows[1].head.slice(12, 29), "Open…/Kimi …     ")
+  assert.equal(view.rows[1].head.slice(12, 30), "Open…/Kimi K…     ")
+  assert.equal(cellWidth(view.rows[1].head.slice(12, 30)), 18)
 })
 
-test("C15 INSTANCE_BAR_GAP_CELLS = 1 keeps one cell before the boxes", () => {
-  assert.equal(INSTANCE_BAR_GAP_CELLS, 1)
-  const role = runningRole("aa", "Alpha", 1, 100)
-  const head = panel(rootSources(role.sessions, [role.agent], role.running), "root", 35, BODY_MAX_LINES, 0).rows[1].head
-  assert.equal(head[35 - 6], " ")
-  assert.equal(head.at(-1), " ")
-})
-
-test("C16 INSTANCE_FIXED_CELLS = 18 leaves the model column", () => {
-  assert.equal(INSTANCE_FIXED_CELLS, 18)
+test("C14 INSTANCE_FIXED_CELLS = 17 leaves the model column", () => {
+  assert.equal(INSTANCE_FIXED_CELLS, 17)
   const role = runningRole("aa", "Alpha", 1, 100)
   const wide = panel(rootSources(role.sessions, [role.agent], role.running), "root", 35, BODY_MAX_LINES, 0)
-  assert.equal(cellWidth(wide.rows[1].head.slice(12, 29)), 17)
+  assert.equal(cellWidth(wide.rows[1].head.slice(12, 30)), 18)
 
   const narrow = panel(rootSources(role.sessions, [role.agent], role.running), "root", 18, BODY_MAX_LINES, 0)
   assert.equal(cellWidth(narrow.rows[1].head), 14)
-  assert.equal(cellWidth(narrow.rows[1].head.slice(12, 13)), 1)
+  assert.equal(cellWidth(narrow.rows[1].head.slice(12, 14)), 2)
 })
 
-test("C17 PERCENT = 100 scales the fill", () => {
-  assert.equal(PERCENT, 100)
-  assert.equal(barFill(100), 5)
-  assert.equal(barFill(0), 0)
+test("C15 tight boxes: the model column ends where the boxes start", () => {
+  const roleSources: Sources = {
+    sessions: fakeSessions([{ id: "root" }]),
+    agents: [agent("a", "A", { model: { id: "grok47f", providerID: "go" } })],
+    models: [{ id: "grok47f", modelID: "grok47f", providerID: "go", name: "Grok 4.7 Flash" }],
+    providers: [{ id: "go", name: "OpenCode Go" }],
+  }
+  const roleHead = panel(roleSources, undefined, 35, BODY_MAX_LINES, 0).rows[0].head
+  assert.equal(roleHead.slice(13, 30), "Go/Grok 4.7 Flash")
+  assert.equal(cellWidth(roleHead.slice(13, 30)), 17)
+  // A gap cell would shrink the column to 16 and clip the label.
+  assert.notEqual(roleHead.slice(13, 30), "Go/Grok 4.7 Fla…")
+
+  const instanceSources: Sources = {
+    sessions: fakeSessions(
+      [
+        { id: "root" },
+        {
+          id: "g",
+          parentID: "root",
+          agent: "a",
+          title: "x",
+          model: { id: "grok471", providerID: "go" },
+          time: { created: 100 },
+        },
+      ],
+      ["g"],
+    ),
+    agents: [agent("a", "A")],
+    models: [{ id: "grok471", modelID: "grok471", providerID: "go", name: "Grok 4.7.1" }],
+    providers: [{ id: "go", name: "OpenCode Go" }],
+  }
+  const instanceHead = panel(instanceSources, "root", 35, BODY_MAX_LINES, 0).rows[1].head
+  assert.equal(instanceHead.slice(12, 30), "Go/Grok 4.7.1     ")
+  assert.equal(instanceHead.slice(12, 25), "Go/Grok 4.7.1")
+  // A gap cell would shrink the text budget to 12 and clip the label.
+  assert.notEqual(instanceHead.slice(12, 25), "Go/Grok 4.7…")
 })
 
-test("C18 BAR_MIN_FILL = 0 clamps the lower edge", () => {
-  assert.equal(BAR_MIN_FILL, 0)
+test("F21 above width 35 the instance text stays 13 cells and the column pads", () => {
+  const at = (id: string, modelName: string) => {
+    const sources: Sources = {
+      sessions: fakeSessions(
+        [
+          { id: "root" },
+          {
+            id: "g",
+            parentID: "root",
+            agent: "a",
+            title: "x",
+            model: { id, providerID: "go" },
+            time: { created: 100 },
+          },
+        ],
+        ["g"],
+      ),
+      agents: [agent("a", "A")],
+      models: [{ id, modelID: id, providerID: "go", name: modelName }],
+      providers: [{ id: "go", name: "OpenCode Go" }],
+    }
+    return panel(sources, "root", 39, BODY_MAX_LINES, 0).rows[1].head
+  }
+
+  // Width 39: instance column 22, but the text cap stays 13, so the other 9
+  // cells are padding and the boxes stay tight at column W-4 (F21, C13/C14).
+  const head = at("grok471", "Grok 4.7.1")
+  assert.equal(head, " └ x        Go/Grok 4.7.1         ")
+  assert.equal(cellWidth(head), 39 - BAR_CELLS)
+  assert.equal(head.length, 39 - BAR_CELLS)
+  assert.equal(head.slice(12, 25), "Go/Grok 4.7.1")
+  assert.equal(head.slice(25, 39 - BAR_CELLS), " ".repeat(9))
+  assert.equal(head.slice(25, 39 - BAR_CELLS).trim(), "")
+  assert.equal(cellWidth(head) + BAR_CELLS, 39)
+
+  // Does not fit the 13-cell text cap: the 22-cell column has room, but the
+  // text still clips at 13. A wider-text implementation (column-sized text)
+  // would keep the 17-cell label whole, and a short column (12 cells) would
+  // clip one cell earlier.
+  const long = at("grok471pro", "Grok 4.7.1 Pro")
+  assert.equal(long.slice(12, 25), "Go/Grok 4.7.…")
+  assert.notEqual(long.slice(12, 25), "Go/Grok 4.7.1")
+  assert.notEqual(long.slice(12, 25), "Go/Grok 4.7…")
+  assert.equal(cellWidth(long), 39 - BAR_CELLS)
+  assert.equal(long.slice(25, 39 - BAR_CELLS), " ".repeat(9))
+  assert.equal(cellWidth(long) + BAR_CELLS, 39)
+})
+
+test("C16 FILL_MIN_BOXES = 0 clamps the lower edge", () => {
+  assert.equal(FILL_MIN_BOXES, 0)
   assert.equal(barFill(0), 0)
+  assert.equal(barFill(9), 0)
   assert.equal(barFill(-1), 0)
 })
 
-test("C19 WARNING_MIN_PCT = 50 starts the warning band", () => {
-  assert.equal(WARNING_MIN_PCT, 50)
-  assert.equal(barBand(50), "warning")
-  assert.equal(barBand(49.9), "success")
+test("C17 FILL_MAX_BOXES = 5 clamps the upper edge", () => {
+  assert.equal(FILL_MAX_BOXES, 5)
+  assert.equal(barFill(1000), 5)
+  assert.equal(barFill(89), 4)
 })
 
-test("C20 ERROR_MIN_PCT = 70 starts the error band", () => {
-  assert.equal(ERROR_MIN_PCT, 70)
-  assert.equal(barBand(70), "error")
-  assert.equal(barBand(69.9), "warning")
+test("C18 TPS_PER_BOX = 20 fills one box", () => {
+  assert.equal(TPS_PER_BOX, 20)
+  assert.equal(barFill(20), 1)
+  assert.equal(barFill(19), 1)
+  // 29 still needs 30 for two boxes.
+  assert.equal(barFill(29), 1)
 })
 
-test("C21 GRACE_MS = 30000 is a half-open window", () => {
+test("C19 the fill formula is half-up and clamped", () => {
+  assert.equal(barFill(10), 1)
+  assert.equal(barFill(30), 2)
+  assert.equal(barFill(50), 3)
+  assert.equal(barFill(90), 5)
+  assert.equal(barFill(9), 0)
+  assert.equal(barFill(29), 1)
+  assert.equal(barFill(89), 4)
+  assert.equal(barFill(undefined), 0)
+})
+
+test("C20 tps formula sums tokens over the summed stream window", () => {
+  assert.equal(speedTps([assistant(200, 1000, 2000)]), 200)
+  // 200 tokens over 4000 ms; the average of the per-message rates is 66.67.
+  const two = [assistant(100, 0, 1000), assistant(100, 0, 3000)]
+  assert.equal(speedTps(two), 50)
+  assert.notEqual(speedTps(two), 66.67)
+
+  // Does-not-fit: no completed time, no tokens, or a zero window.
+  assert.equal(
+    speedTps([{ type: "assistant", tokens: { output: 200 }, time: { created: 1000, streamed: 1000 } }]),
+    undefined,
+  )
+  assert.equal(
+    speedTps([{ type: "assistant", time: { created: 1000, streamed: 1000, completed: 2000 } }]),
+    undefined,
+  )
+  assert.equal(speedTps([assistant(200, 1000, 1000)]), undefined)
+  assert.equal(barFill(speedTps([assistant(200, 2000, 2000)])), 0)
+})
+
+test("C21 barTone is single green or muted", () => {
+  assert.equal(barTone(barFill(10)), "success")
+  assert.equal(barTone(barFill(300)), "success")
+  // Five boxes never take a warning or error tone.
+  assert.equal(barTone(barFill(1000)), "success")
+  assert.equal(barTone(barFill(undefined)), "muted")
+  for (const filled of [0, 1, 2, 3, 4, 5]) {
+    const tone = barTone(filled)
+    assert.equal(tone === "success" || tone === "muted", true)
+    assert.notEqual(tone, "warning")
+    assert.notEqual(tone, "error")
+  }
+})
+
+test("C22 GRACE_MS = 30000 is a half-open window", () => {
   assert.equal(GRACE_MS, 30_000)
   const NOW = 1_000_000
   const graceAt = (elapsed: number) => {
@@ -649,7 +812,7 @@ test("C21 GRACE_MS = 30000 is a half-open window", () => {
   assert.equal(folded.rows[0].state, "idle")
 })
 
-test("C22 GRACE_TICK_MS = 1000 moves a grace row past the boundary", () => {
+test("C23 GRACE_TICK_MS = 1000 moves a grace row past the boundary", () => {
   assert.equal(GRACE_TICK_MS, 1_000)
   const session = child("f", "aa", 0, {
     outcome: "failed",
@@ -664,14 +827,14 @@ test("C22 GRACE_TICK_MS = 1000 moves a grace row past the boundary", () => {
   assert.equal(after.rows.some((row) => row.state === "grace"), false)
 })
 
-test("C23 PICKER_MODEL_CELLS = 96 clips the picker model label", () => {
+test("C24 PICKER_MODEL_CELLS = 96 clips the picker model label", () => {
   assert.equal(PICKER_MODEL_CELLS, 96)
   const label = "a".repeat(96)
   assert.equal(clip(label, PICKER_MODEL_CELLS), label)
   assert.equal(clip(`${label}a`, PICKER_MODEL_CELLS), `${"a".repeat(95)}…`)
 })
 
-test("C24 ELLIPSIS_CELLS = 1 is reserved by every clip", () => {
+test("C25 ELLIPSIS_CELLS = 1 is reserved by every clip", () => {
   assert.equal(ELLIPSIS_CELLS, 1)
   assert.equal(clip("abc", 5), "abc")
   assert.equal(clip("abcdef", 4), "abc…")
@@ -679,26 +842,23 @@ test("C24 ELLIPSIS_CELLS = 1 is reserved by every clip", () => {
   assert.equal(clip("abc", 0), "")
 })
 
-test("C25 PROVIDER_MAX_SHARE = 1/2 caps the provider side", () => {
+test("C26 PROVIDER_MAX_SHARE = 1/2 caps the provider side", () => {
   assert.equal(PROVIDER_MAX_SHARE, 1 / 2)
   assert.equal(fitModel("Go/MiniMax M3.1 Flash", 16), "Go/MiniMax M3.1…")
   assert.equal(fitModel("SomeVeryBigName/Model", 16), "SomeVe…/Model")
-})
-
-test("C26 barFill rounds half up and clamps to the boxes", () => {
-  assert.equal(barFill(10), 1)
-  assert.equal(barFill(50), 3)
-  assert.equal(barFill(70), 4)
-  assert.equal(barFill(90), 5)
-  assert.equal(barFill(9.99), 0)
-  assert.equal(barFill(120), 5)
-  assert.equal(barFill(-1), 0)
 })
 
 test("C27 UNKNOWN_MODEL is the last resolution fallback", () => {
   assert.equal(UNKNOWN_MODEL, "unknown model")
   const sources: Sources = { sessions: fakeSessions([{ id: "s1" }]) }
   assert.equal(resolveModel(sources.sessions.list()[0], sources), "unknown model")
+
+  const unknown = (width: number) =>
+    panel(rootSources([child("u", "aa", 100)], [agent("aa", "Alpha")], ["u"]), "root", width, BODY_MAX_LINES, 0)
+  // Width 30 leaves a 13-cell instance column, so the whole text fits.
+  assert.equal(unknown(30).rows[1].head.slice(12, 25), "unknown model")
+  // Width 29 leaves a 12-cell column, so it clips.
+  assert.equal(unknown(29).rows[1].head.slice(12, 24), "unknown mod…")
   assert.equal(clip(UNKNOWN_MODEL, 13), "unknown model")
   assert.equal(clip(UNKNOWN_MODEL, 12), "unknown mod…")
 })
@@ -725,7 +885,7 @@ test("C29 picker agent and model budgets are independent", () => {
   assert.equal(cellWidth(clipped.split(" · ")[1]), PICKER_MODEL_CELLS)
 })
 
-test("F17 a model without limit.context keeps pct and boxes unknown", () => {
+test("R6 unknown speed keeps both rows' boxes empty", () => {
   const NOW = 1_000_000
   const sources: Sources = {
     sessions: fakeSessions(
@@ -734,7 +894,7 @@ test("F17 a model without limit.context keeps pct and boxes unknown", () => {
         child("a-1", "aa", NOW, { model: { id: "deepseek-flash", providerID: "deepseek" } }),
       ],
       ["a-1"],
-      { "a-1": [{ tokens: { input: 1_000 } }] },
+      { "a-1": [{ type: "assistant", tokens: { output: 1_000 } }] },
     ),
     agents: [agent("aa", "Alpha")],
     models,
@@ -742,53 +902,108 @@ test("F17 a model without limit.context keeps pct and boxes unknown", () => {
   }
 
   const view = panel(sources, "root", 35, BODY_MAX_LINES, NOW)
-  assert.equal(view.rows[0].pct, undefined)
+  assert.equal(view.rows[0].tps, undefined)
   assert.equal(view.rows[0].filled, 0)
-  assert.equal(view.rows[1].pct, undefined)
+  assert.equal(view.rows[1].tps, undefined)
   assert.equal(view.rows[1].filled, 0)
-  assert.equal(barBand(view.rows[0].pct), "muted")
+  assert.equal(barTone(view.rows[0].filled), "muted")
 })
 
-test("role row carries the busiest instance pct and fill (G13)", () => {
+test("role row carries the busiest active instance tps and fill (G13)", () => {
   const NOW = 1_000_000
   const sessions = [child("a-1", "aa", NOW), child("a-2", "aa", NOW + 1)]
   const sources: Sources = {
     sessions: fakeSessions([{ id: "root" }, ...sessions], ["a-1", "a-2"], {
-      "a-1": [{ tokens: { input: 20 } }],
-      "a-2": [{ tokens: { input: 80 } }],
+      "a-1": [assistant(20, 0, 1000)],
+      "a-2": [assistant(60, 0, 1000)],
     }),
     agents: [agent("aa", "Alpha", { model: { id: "deepseek-flash", providerID: "deepseek" } })],
-    models: [{ ...models[0], limit: { context: 100 } }],
+    models,
     providers,
   }
 
   const view = panel(sources, "root", 35, BODY_MAX_LINES, NOW)
-  assert.equal(view.rows[0].pct, 80)
-  assert.equal(view.rows[0].filled, 4)
-  assert.equal(view.rows[1].pct, 20)
+  assert.equal(view.rows[0].tps, 60)
+  assert.equal(view.rows[0].filled, 3)
+  assert.equal(view.rows[1].tps, 20)
   assert.equal(view.rows[1].filled, 1)
-  assert.equal(view.rows[2].pct, 80)
-  assert.equal(view.rows[2].filled, 4)
+  assert.equal(view.rows[2].tps, 60)
+  assert.equal(view.rows[2].filled, 3)
 })
 
-test("role row keeps the known pct when the other instance is unknown (G13)", () => {
+test("role row keeps the known tps when the other instance is unknown (G13)", () => {
   const NOW = 1_000_000
   const sessions = [child("a-1", "aa", NOW), child("a-2", "aa", NOW + 1)]
   const sources: Sources = {
     sessions: fakeSessions([{ id: "root" }, ...sessions], ["a-1", "a-2"], {
-      "a-2": [{ tokens: { input: 80 } }],
+      "a-2": [assistant(40, 0, 1000)],
     }),
     agents: [agent("aa", "Alpha", { model: { id: "deepseek-flash", providerID: "deepseek" } })],
-    models: [{ ...models[0], limit: { context: 100 } }],
+    models,
     providers,
   }
 
   const view = panel(sources, "root", 35, BODY_MAX_LINES, NOW)
-  assert.equal(view.rows[0].pct, 80)
-  assert.equal(view.rows[0].filled, 4)
-  assert.equal(view.rows[1].pct, undefined)
+  assert.equal(view.rows[0].tps, 40)
+  assert.equal(view.rows[0].filled, 2)
+  assert.equal(view.rows[1].tps, undefined)
   assert.equal(view.rows[1].filled, 0)
-  assert.equal(view.rows[2].pct, 80)
+  assert.equal(view.rows[2].tps, 40)
+  assert.equal(view.rows[2].filled, 2)
+})
+
+test("F18 a grace instance and its role show empty boxes", () => {
+  const NOW = 1_000_000
+  const session = child("g", "aa", NOW - 1_000, {
+    outcome: "failed",
+    time: { created: NOW - 1_000, updated: NOW - 1_000 },
+  })
+  const sources: Sources = {
+    sessions: fakeSessions([{ id: "root" }, session], [], {
+      g: [assistant(200, 0, 1000)],
+    }),
+    agents: [agent("aa", "Alpha")],
+    models,
+    providers,
+  }
+
+  const view = panel(sources, "root", 35, BODY_MAX_LINES, NOW)
+  assert.equal(view.rows[0].state, "grace")
+  assert.equal(view.rows[0].tps, undefined)
+  assert.equal(view.rows[0].filled, 0)
+  assert.equal(view.rows[1].state, "grace")
+  assert.equal(view.rows[1].tps, undefined)
+  assert.equal(view.rows[1].filled, 0)
+})
+
+test("F22 speed never reads now and an in-flight message never counts", () => {
+  const session = child("a-1", "aa", 0)
+  const sources: Sources = {
+    sessions: fakeSessions([{ id: "root" }, session], ["a-1"], {
+      "a-1": [assistant(60, 0, 1000)],
+    }),
+    agents: [agent("aa", "Alpha")],
+    models,
+    providers,
+  }
+
+  const early = panel(sources, "root", 35, BODY_MAX_LINES, 0)
+  const late = panel(sources, "root", 35, BODY_MAX_LINES, 9_999_999)
+  assert.equal(early.rows[1].tps, 60)
+  assert.equal(late.rows[1].tps, 60)
+  assert.equal(early.rows[1].filled, late.rows[1].filled)
+
+  const incomplete: Sources = {
+    sessions: fakeSessions([{ id: "root" }, session], ["a-1"], {
+      "a-1": [{ type: "assistant", tokens: { output: 500 }, time: { created: 0, streamed: 0 } }],
+    }),
+    agents: [agent("aa", "Alpha")],
+    models,
+    providers,
+  }
+  const view = panel(incomplete, "root", 35, BODY_MAX_LINES, 0)
+  assert.equal(view.rows[1].tps, undefined)
+  assert.equal(view.rows[1].filled, 0)
 })
 
 /* ------------------------------------------------------------------ */

@@ -16,13 +16,6 @@ export type ModelInfo = {
   modelID: string
   providerID: string
   name: string
-  limit?: { context: number }
-}
-
-/** The part of a message's usage that fills the context window. */
-export type TokenUsage = {
-  input: number
-  cache?: { read?: number }
 }
 
 export type ProviderInfo = {
@@ -79,8 +72,6 @@ export type RunningSubagent = {
   since?: number
   /** Short `Provider/Model` label used by the sidebar rows. */
   modelShort?: string
-  /** Context window used, 0-100. Unknown when the usage or limit is missing. */
-  pct?: number
 }
 
 export const UNKNOWN_MODEL = "unknown model"
@@ -145,37 +136,50 @@ export function resolveModel(
   return ref ? label(ref) : UNKNOWN_MODEL
 }
 
-/** Context window size for the model a session resolves to. */
-function contextLimit(ref: ModelRef | undefined, models: ModelInfo[] = []): number | undefined {
-  if (!ref) return undefined
-  const model = models.find(
-    (entry) => entry.providerID === ref.providerID && (entry.modelID === ref.id || entry.id === ref.id),
-  )
-  return model?.limit?.context
-}
-
-/** Usage of the newest message that reports tokens; older ones predate it. */
-function lastUsage(sources: Sources, sessionID: string): TokenUsage | undefined {
-  const list = sources.sessions.message?.list(sessionID) ?? []
-  for (let index = list.length - 1; index >= 0; index--) {
-    const usage = (list[index] as { tokens?: TokenUsage } | undefined)?.tokens
-    if (usage) return usage
-  }
-  return undefined
+/** One assistant message's token report and stream window (R6, §2). */
+type SpeedMessage = {
+  type?: string
+  tokens?: { output?: number }
+  time?: { created?: number; streamed?: number; completed?: number }
 }
 
 /**
- * Context window used from the newest message's prompt size over the model
- * limit. Cumulative session tokens are wrong here: they never fall after
- * compaction. Not clamped: over-limit reports above 100, only the fill clamps.
+ * R6: output tokens per second over the instance's counted assistant messages.
+ * A message counts only with a finite `tokens.output >= 0` and a measurable
+ * stream window (`completed > streamed >= created`). Anything else is skipped
+ * whole. Unknown (no counted message, `Σ ms <= 0`, or a non-finite sum) is
+ * `undefined`, never a guessed zero.
  */
-export function contextPct(session: SessionInfo, sources: Sources): number | undefined {
-  const limit = contextLimit(modelRef(session, sources), sources.models)
-  const usage = lastUsage(sources, session.id)
-  if (!limit || !usage) return undefined
-  const used = usage.input + (usage.cache?.read ?? 0)
-  if (!Number.isFinite(used) || used < 0) return undefined
-  return (used / limit) * PERCENT
+export function speedTps(messages: ReadonlyArray<unknown> = []): number | undefined {
+  let tokens = 0
+  let ms = 0
+  for (const entry of messages) {
+    const message = entry as SpeedMessage | undefined
+    if (!message || message.type !== "assistant") continue
+    const output = message.tokens?.output
+    const created = message.time?.created
+    const streamed = message.time?.streamed
+    const completed = message.time?.completed
+    if (
+      typeof output !== "number" ||
+      !Number.isFinite(output) ||
+      output < 0 ||
+      typeof created !== "number" ||
+      !Number.isFinite(created) ||
+      typeof streamed !== "number" ||
+      !Number.isFinite(streamed) ||
+      typeof completed !== "number" ||
+      !Number.isFinite(completed) ||
+      !(completed > streamed) ||
+      !(streamed >= created)
+    ) {
+      continue
+    }
+    tokens += output
+    ms += completed - streamed
+  }
+  if (!Number.isFinite(tokens) || !Number.isFinite(ms) || ms <= 0) return undefined
+  return (1000 * tokens) / ms
 }
 
 /** Collapses newlines and repeated spaces so titles stay on one line. */
@@ -209,7 +213,6 @@ export function collect(sources: Sources, sessionID?: string): RunningSubagent[]
       agent: session.agent ?? UNKNOWN_AGENT,
       model: ref ? label(ref) : UNKNOWN_MODEL,
       modelShort: ref ? shortLabel(ref) : UNKNOWN_MODEL,
-      pct: contextPct(session, sources),
       title: cleanTitle(session.title ?? session.id),
       since: session.time?.created,
     })
@@ -218,7 +221,7 @@ export function collect(sources: Sources, sessionID?: string): RunningSubagent[]
   return rows
 }
 
-/** Width of the context indicator, in boxes. */
+/** Speed boxes on every row, filled or empty. */
 export const BAR_CELLS = 5
 
 /** Row width in cells when the width option is absent. */
@@ -242,11 +245,8 @@ export const ROLE_NAME_GAP_CELLS = 1
 /** Hard cap on the role model label text, so a wide sidebar does not stretch it. */
 export const ROLE_MODEL_MAX_CELLS = 20
 
-/** Every role row cell except the model column: number, name, gaps, boxes. */
-export const ROLE_FIXED_CELLS = 19
-
-/** Gap between the role model column and the boxes. */
-export const ROLE_BAR_GAP_CELLS = 1
+/** Every role row cell except the model column: number, name, gap, boxes. */
+export const ROLE_FIXED_CELLS = 18
 
 /** Instance indent: space, tree glyph, space. */
 export const INSTANCE_INDENT_CELLS = 3
@@ -258,25 +258,19 @@ export const INSTANCE_TITLE_CELLS = 8
 export const INSTANCE_TITLE_GAP_CELLS = 1
 
 /** Instance model labels are clipped to this many cells. */
-export const INSTANCE_MODEL_CELLS = 12
+export const INSTANCE_MODEL_CELLS = 13
 
-/** Every instance row cell except the model column: indent, title, gaps, boxes. */
-export const INSTANCE_FIXED_CELLS = 18
+/** Every instance row cell except the model column: indent, title, gap, boxes. */
+export const INSTANCE_FIXED_CELLS = 17
 
-/** Gap between the instance model column and the boxes. */
-export const INSTANCE_BAR_GAP_CELLS = 1
+/** Tokens per second that fills one box. */
+export const TPS_PER_BOX = 20
 
-/** Percentage scale: a full context window is 100. */
-export const PERCENT = 100
+/** Lower fill clamp: an unknown or negative speed fills no box. */
+export const FILL_MIN_BOXES = 0
 
-/** Lower fill clamp, so a negative percentage repeats no boxes. */
-export const BAR_MIN_FILL = 0
-
-/** Percentage at which the bar enters the warning band. */
-export const WARNING_MIN_PCT = 50
-
-/** Percentage at which the bar enters the error band. */
-export const ERROR_MIN_PCT = 70
+/** Upper fill clamp: the bar stops at the box count. */
+export const FILL_MAX_BOXES = 5
 
 /** Grace window for a failed or interrupted instance row, in milliseconds. */
 export const GRACE_MS = 30_000
@@ -404,7 +398,7 @@ function instanceColumn(width: number): number {
   return effectiveWidth(width) - INSTANCE_FIXED_CELLS
 }
 
-/** Role row text: number, agent name, model column, and the gap before boxes. */
+/** Role row text: number, agent name, and the model column. */
 function roleHead(index: number, name: string, model: string, width: number): string {
   const column = roleColumn(width)
   const number = String(index).padStart(ROLE_NUMBER_DIGITS)
@@ -412,15 +406,15 @@ function roleHead(index: number, name: string, model: string, width: number): st
   const modelField = model
     ? padCells(fitModel(model, Math.min(column, ROLE_MODEL_MAX_CELLS)), column)
     : " ".repeat(column)
-  return `${number}.${agent}${" ".repeat(ROLE_NAME_GAP_CELLS)}${modelField}${" ".repeat(ROLE_BAR_GAP_CELLS)}`
+  return `${number}.${agent}${" ".repeat(ROLE_NAME_GAP_CELLS)}${modelField}`
 }
 
-/** Instance row text: indent, title, model column, and the gap before boxes. */
+/** Instance row text: indent, title, and the model column. */
 function instanceHead(glyph: "├" | "└", title: string, model: string, width: number): string {
   const column = instanceColumn(width)
   const shownTitle = padCells(clip(cleanTitle(title), INSTANCE_TITLE_CELLS), INSTANCE_TITLE_CELLS)
   const modelField = padCells(fitModel(model, Math.min(column, INSTANCE_MODEL_CELLS)), column)
-  return ` ${glyph} ${shownTitle}${" ".repeat(INSTANCE_TITLE_GAP_CELLS)}${modelField}${" ".repeat(INSTANCE_BAR_GAP_CELLS)}`
+  return ` ${glyph} ${shownTitle}${" ".repeat(INSTANCE_TITLE_GAP_CELLS)}${modelField}`
 }
 
 export type RowState = "idle" | "active" | "grace"
@@ -428,13 +422,13 @@ export type RowState = "idle" | "active" | "grace"
 export type PanelRow = {
   /**
    * The full text before the boxes: role number and name or instance glyph
-   * and title, then the model field, then the gap.
+   * and title, then the model field.
    */
   head: string
-  /** Filled boxes, 0-5. Empty for an idle role row. */
+  /** Filled boxes, 0-`BAR_CELLS`. Empty for an idle or grace row. */
   filled: number
-  /** Context used. Unknown when the session reports no usage. */
-  pct?: number
+  /** Speed the fill was derived from. Unknown renders empty boxes. */
+  tps?: number
   state: RowState
   /** Agent-definition colour, applied while a row is not idle. */
   agentColor?: string
@@ -448,21 +442,19 @@ type Section = {
   instances: Array<{ session: SessionInfo; state: "active" | "grace" }>
 }
 
-export type BarBand = "muted" | "success" | "warning" | "error"
+/** Speed tone: filled boxes are success green, empty boxes are muted (C21). */
+export type BarTone = "success" | "muted"
 
-/** Context boxes filled by `pct`, clamped to 0-`BAR_CELLS`. */
-export function barFill(pct: number | undefined): number {
-  if (pct === undefined) return BAR_MIN_FILL
-  const filled = Math.round((pct * BAR_CELLS) / PERCENT)
-  return Math.min(BAR_CELLS, Math.max(BAR_MIN_FILL, filled))
+/** Boxes filled by `tps`, half-up (`floor(x + 0.5)`) and clamped. */
+export function barFill(tps: number | undefined): number {
+  if (tps === undefined || !Number.isFinite(tps)) return FILL_MIN_BOXES
+  const filled = Math.floor(tps / TPS_PER_BOX + 0.5)
+  return Math.min(FILL_MAX_BOXES, Math.max(FILL_MIN_BOXES, filled))
 }
 
-/** Colour band derived from `pct` alone, never from the row text colour. */
-export function barBand(pct: number | undefined): BarBand {
-  if (pct === undefined) return "muted"
-  if (pct < WARNING_MIN_PCT) return "success"
-  if (pct < ERROR_MIN_PCT) return "warning"
-  return "error"
+/** Colour class derived from the fill alone, never from the row text colour. */
+export function barTone(filled: number): BarTone {
+  return filled > 0 ? "success" : "muted"
 }
 
 /** Earliest instance creation; missing timestamps sort last. */
@@ -582,19 +574,26 @@ export function panel(
   let more = 0
   let number = 0
 
+  const tpsBySession = new Map<string, number | undefined>()
+  const instanceTps = (sessionID: string) => {
+    if (!tpsBySession.has(sessionID)) {
+      tpsBySession.set(sessionID, speedTps(sources.sessions.message?.list(sessionID) ?? []))
+    }
+    return tpsBySession.get(sessionID)
+  }
+
   const pushRole = (
     agentName: string,
     model: string,
     state: RowState,
-    pct: number | undefined,
+    tps: number | undefined,
     color: string | undefined,
-    filled: number,
   ) => {
     number += 1
     rows.push({
       head: roleHead(number, agentName, model, W),
-      filled,
-      pct,
+      filled: barFill(tps),
+      tps,
       state,
       agentColor: color,
     })
@@ -604,7 +603,8 @@ export function panel(
     instance: Section["instances"][number],
     color?: string,
   ) => {
-    const pct = contextPct(instance.session, sources)
+    // A finished session has no live speed, so a grace row fills nothing (F18).
+    const tps = instance.state === "active" ? instanceTps(instance.session.id) : undefined
     rows.push({
       head: instanceHead(
         glyph,
@@ -612,8 +612,8 @@ export function panel(
         instanceLabel(instance.session, sources, shortLabel),
         W,
       ),
-      filled: barFill(pct),
-      pct,
+      filled: barFill(tps),
+      tps,
       state: instance.state,
       agentColor: color,
     })
@@ -626,23 +626,16 @@ export function panel(
     const active = section.instances.some((one) => one.state === "active")
     const state: RowState = active ? "active" : "grace"
     const known = section.instances
-      .map((one) => contextPct(one.session, sources))
+      .filter((one) => one.state === "active")
+      .map((one) => instanceTps(one.session.id))
       .filter((value): value is number => value !== undefined)
-    // The role row carries the busiest instance's percentage, so its boxes
-    // take the same band as that instance (G13).
-    const pct = known.length > 0 ? Math.max(...known) : undefined
-    const filled = active ? barFill(pct) : 0
+    // The role row carries its busiest active instance's speed, so its boxes
+    // take the same single tone as that instance (G13, R6).
+    const tps = known.length > 0 ? Math.max(...known) : undefined
     sectionsToEmit.push({
       lines: section.instances.length + 1,
       emit: () => {
-        pushRole(
-          section.name,
-          section.model,
-          state,
-          active ? pct : undefined,
-          active ? section.color : undefined,
-          filled,
-        )
+        pushRole(section.name, section.model, state, tps, active ? section.color : undefined)
         section.instances.forEach((one, index) => {
           pushInstance(index === section.instances.length - 1 ? "└" : "├", one, section.color)
         })
@@ -652,7 +645,7 @@ export function panel(
   for (const role of idle) {
     sectionsToEmit.push({
       lines: 1,
-      emit: () => pushRole(role.name, role.model, "idle", undefined, role.color, 0),
+      emit: () => pushRole(role.name, role.model, "idle", undefined, role.color),
     })
   }
 
