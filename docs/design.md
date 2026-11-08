@@ -206,6 +206,9 @@ Design decisions:
   (the busiest). Its `filled` = the maximum fill. A role with no known usage
   has `pct === undefined`.
 - Fill colour is derived from `pct` alone, never from the row text colour.
+- A resolved model with no `limit.context` in the catalog leaves `pct`
+  unknown: empty muted boxes, the same rendering as unknown usage. There is no
+  invented fallback limit (F17, §2).
 
 ## R7 — Team ordering and overflow
 
@@ -280,23 +283,28 @@ Labels:
 
 `/subagents` (alias `/subagent-models`) lists running subagents only: agent,
 resolved model (full label, clipped at 96), title, elapsed time, session ID.
-Type-to-filter across those fields. Enter opens the session; `alt+o` opens
-without closing the picker. Optional keybind via `bind`.
+Type-to-filter across those fields. Slash arguments pre-filter the picker.
+Enter opens the session; `alt+o` opens without closing the picker. Optional
+keybind via `bind`.
 
 Design decisions:
 
 - The picker is global: all running child sessions, not scoped to the viewed
   tab (F9). It uses the same running-child predicate as R3 without the scope
   filter.
-- Fields: title line `agent · model` (model clipped at 96, agent clipped
-  separately and never counted against 96 — G12); description
+- Fields: title line `agent · model`; the model label clips at 96 cells
+  (`PICKER_MODEL_CELLS`) and the agent clips at 24 cells
+  (`PICKER_AGENT_CELLS`) by the §1.3 `clip` rule. The budgets are
+  independent: the agent never consumes model budget (G12). Description
   `title · elapsed`; footer = session ID.
 - Filter: trimmed, case-insensitive substring across agent, full model,
   title, elapsed text, and session ID; empty query matches everything.
 - Elapsed: `< 60 s` → `Ns`; `< 60 min` → `Nm`; otherwise `Hh Mm`. Unknown
   start time renders empty.
 - Slash command accepts arguments: `/subagents explore` opens the picker
-  pre-filtered (proposed extension, not in R9; F14).
+  pre-filtered by `explore` (R9, F14). The argument is the picker's initial
+  filter query on the same trimmed, case-insensitive substring rule as
+  type-to-filter.
 - Enter resolves the selected session and opens it; `alt+o` opens the
   session and leaves the picker open (G4).
 - Open behaviour: focus the tab when it is a root session, otherwise
@@ -417,8 +425,10 @@ Input: a full or short label `P/M…` and a budget `B` cells.
 Padding to a column is always spaces.
 
 The role label budget is `min(W−19, 20)`; the instance label budget is
-`min(W−18, 12)`. The picker label uses a plain `clip(label, 96)` — the split
-rule is not applied there (R9).
+`min(W−18, 12)`. The picker label uses a plain `clip(label,
+PICKER_MODEL_CELLS)` — the split rule is not applied there (R9) — and the
+picker agent uses `clip(agent, PICKER_AGENT_CELLS)` with the same `clip` rule
+(§1.3, C28, F16).
 
 ## 2. Data flow
 
@@ -433,13 +443,14 @@ session state; every field is derived from a host source at render time.
 | `context.data.session.root(id)` | root session id | tab scope (R3) |
 | `context.data.session.status(id)` | `running` / `idle` | active vs not |
 | `context.data.session.message.list(id)` | messages with optional `tokens` | `pct` numerator (newest reporting message) |
+| `context.data.session.sync(id)`, `context.data.session.message.sync(id)` | loads one session / its messages into the TUI data cache | populates `session.list`/`session.get` and `message.list` before they are read (G16) |
 | `context.data.location.model.list(location)` | model id, modelID, providerID, name, `limit.context` | `pct` denominator, model display names |
 | `context.data.location.provider.list(location)` | provider id, name | provider display names / short label last word |
 | `context.theme` | `text.base`, `text.muted`, `text.feedback.success/warning/error.base` | title, idle/active/grace text, bar bands, empty boxes |
 | `context.storage.store("opencode-subagent-model")` | persisted `{ compact }` | R10 |
 | slot input `sessionID` | viewed session id | R3 tab scope; compact count scope |
 | `context.ui.router.current()` | current route | session context for opening a picked session; not used to scope the picker (F9) |
-| host events (`session.created/deleted/moved/forked/renamed/status/idle/agent.selected/model.selected/execution.started/succeeded/failed/interrupted`) | invalidation | bump the view signal |
+| host events (`session.created/deleted/moved/forked/renamed/status/idle/agent.selected/model.selected/execution.started/succeeded/failed/interrupted`) | invalidation; on `session.created` and `session.execution.started` also a sync trigger (G16) | bump the view signal; load the instance session then its messages |
 | 1 s ticker | clock while a grace row exists | recompute `now` for grace expiry |
 
 Location: the location the TUI is showing (`context.location`, else
@@ -449,6 +460,26 @@ from disk; the host's agent list is authoritative.
 `pct` chain: resolve the session's model ref (R8) → find `limit.context` by
 provider + model id → find the newest message with `tokens` → `used = input +
 cache.read` → `pct = used / limit × 100`. Either side missing → unknown.
+
+Data availability: `message.list(id)` reads the data layer's cache, which the
+client fills only for sessions it has synchronised. The current code never
+calls `session.sync()` or `session.message.sync()`, so an instance session
+usually has no loaded messages and `pct` stays unknown (G16). The plugin
+therefore syncs before it reads, on the touchpoints it already collects:
+
+- `session.execution.started` or `session.created` for a child session with a
+  visible role → `context.data.session.sync(sessionID)` first, then
+  `context.data.session.message.sync(sessionID)` once the session is loaded.
+- The sync is a host call with a side effect and lives in `src/tui.tsx`, not
+  in the pure layer (R12); no cache entry is invalidated by hand.
+- Sync failure is not a panel failure: it follows R11 (toast, last good view),
+  and the affected row simply shows what is loaded.
+
+No-limit rule (F17): when the resolved model has no `limit.context` in the
+catalog, `pct` stays unknown and the bar renders exactly like unknown usage —
+empty muted boxes (R6). The plugin never invents a fallback limit (no provider
+default, no nominal window, no `0`). The pure-layer `pct` semantics are
+unchanged: `contextPct` still returns `undefined` when either side is missing.
 
 ## 3. State rules and colours
 
@@ -535,6 +566,8 @@ cases. Values are exact, not shapes; a fixture that asserts only width or
 | C25 | `PROVIDER_MAX_SHARE` | 1/2 of the field | provider share in the split rule | budget 16: `"Go/MiniMax M3.1 Flash"` → `"Go/MiniMax M3.1…"` | budget 16: `"SomeVeryBigName/Model"` → `"SomeVe…/Model"` (provider 7 cells + `/`) | R5 |
 | C26 | fill formula | `round(pct × 5 / 100)`, half up | boxes filled | `pct 10 → 1`, `50 → 3`, `70 → 4`, `90 → 5` | `pct 9.99 → 0`, `120 → 5` (clamp), `−1 → 0` | R6 |
 | C27 | `UNKNOWN_MODEL` | text `unknown model` | last resolution fallback | session with no ref → `"unknown model"` | a cell budget ≥ 13 keeps it; 12 clips to `"unknown mod…"` | R8 |
+| C28 | `PICKER_AGENT_CELLS` | 24 | picker agent field | `"explore-deep-review-qa"` (22 cells) and `"explore-deep-review-qa12"` (24 cells) kept whole | `"explore-deep-review-qa123"` (25 cells) → `"explore-deep-review-qa1…"` (23 agent cells + `…`, 24 cells) | R9 |
+| C29 | picker title budgets (independence rule) | agent ≤ `PICKER_AGENT_CELLS`, model ≤ `PICKER_MODEL_CELLS`; neither consumes the other | picker title `agent · model` | agent `"explore-deep-review-qa12"` (24 cells) with model `"m"` × 96 (96 cells) → all 24 agent cells and all 96 model cells render unclipped | agent `"explore-deep-review-qa123"` (25 cells) with the same 96-cell model → agent renders `"explore-deep-review-qa1…"` (24 cells) and the model still renders 96 cells, not 95 (an implementation subtracting the agent overflow from `PICKER_MODEL_CELLS` yields 95 and fails) | R9 |
 
 Fixtures for C1 that pin the section-stop rule (R7, §4, F5). Width 35;
 sections built from roles and instances as stated.
@@ -569,6 +602,31 @@ C14 split-rule recomputation, both strings derived from §1.3 and pinned:
 - Non-discriminating input, kept only as a plain-clip coincidence note:
   `"Go/MiniMax M3.1 Flash"` at budget 12 also yields `"Go/MiniMax …"` under
   both rules; it must not be used as the C14 fixture.
+
+C28 recomputation, pinned:
+
+- Input `agent = "explore-deep-review-qa123"`, `cellWidth = 25 > 24`.
+- Widest prefix with `prefix + 1 <= 24` → `"explore-deep-review-qa1"` (23
+  cells) → `"explore-deep-review-qa1…"` (24 cells). An implementation that
+  takes a 24-cell prefix and then appends `…` returns
+  `"explore-deep-review-qa12…"` (25 cells) and fails.
+
+C29 recomputation (independent budgets), pinned:
+
+- Fits agent `"explore-deep-review-qa12"`, counted char by char under §0
+  (every character narrow ASCII, 1 cell each): `explore` 7, `-` 8, `deep`
+  12, `-` 13, `review` 19, `-` 20, `qa12` 24. `cellWidth = 24 =
+  PICKER_AGENT_CELLS`, so `clip(agent, 24)` returns it unchanged.
+- Fits model `"m"` repeated 96 times: 96 cells = `PICKER_MODEL_CELLS`, so
+  the plain `clip(model, 96)` returns it unchanged. Both fields therefore
+  survive whole: 24 agent cells and 96 model cells.
+- Does-not-fit agent `"explore-deep-review-qa123"` = the 24-cell string plus
+  `3` = 25 cells. `clip(agent, 24)` → widest prefix with `prefix + 1 <= 24`
+  → `"explore-deep-review-qa1"` (23 cells) plus `…` (1 cell) =
+  `"explore-deep-review-qa1…"` (24 cells).
+- The model keeps its own budget: the same 96-cell `"m"` string renders 96
+  cells. An implementation that computes the model budget as
+  `96 − (25 − 24) = 95` renders 95 cells plus `…` and fails the fixture.
 
 Additional exact-value fixtures that carry no number:
 
@@ -635,7 +693,8 @@ Coder task; findings and fixes reference these IDs.
   cells; wide characters and surrogate pairs misalign the boxes. The design
   measures cells (§0).
 - **G12 (R9)** — The picker clips `agent · model` together at 96; the design
-  clips the model label at 96 and the agent separately.
+  clips the model label at `PICKER_MODEL_CELLS` and the agent separately at
+  `PICKER_AGENT_CELLS`, with independent budgets (C28, C29).
 - **G13 (R6)** — Working role rows never receive `pct`, so their filled boxes
   render in the muted (unknown) colour instead of the success/warning/error
   band of the busiest instance. `panel()` role line must carry the busiest
@@ -648,12 +707,25 @@ Coder task; findings and fixes reference these IDs.
   later sections, which can show a lower-priority role after a folded
   higher-priority one. The design stops the body at the first non-fitting
   section (F5).
+- **G16 (R6, §2 availability)** — Nothing syncs sessions into the TUI data
+  cache: `src/tui.tsx:28-42` watches `session.execution.started` and
+  `session.created` (and the other lifecycle events) only to bump a signal,
+  `src/tui.tsx:70-78` passes `context.data.session` through, and
+  `src/lib/collect.ts:154` then calls `sessions.message.list` on a cache that
+  usually has no messages for an instance session. Result: `pct` is unknown,
+  the bar never fills. The design syncs `context.data.session.sync(id)` then
+  `context.data.session.message.sync(id)` on those touchpoints (§2, F17 keeps
+  the no-limit rendering). Host-call side effect: verified in review by
+  inspection, not by a pure-layer fixture (R12).
 
 ## 8. Findings for the Project Manager
 
 Open points in `docs/Product.md` that this design resolves. None may be
 settled by the Designer alone; the Project Manager takes them to the Analyst
-(or the human) for the final wording.
+(or the human) for the final wording. F3 and F14 are settled by the Product
+update; F16 and F17 are already settled (human decision A1; design decision
+recorded for traceability). Those four are listed with their source rather
+than as requests for an answer.
 
 - **F1 (R5 width domain).** R5 gives no lower bound on `width`. Below 19 cells
   the role row cannot hold its fields; the design raises the effective width
@@ -711,13 +783,27 @@ settled by the Designer alone; the Project Manager takes them to the Analyst
   muted boxes" for unknown usage, but not the colour of the unfilled cells in a
   partially filled bar. The design renders the `5 − filled` remainder in
   `theme.text.muted` on every row. Confirm.
-- **F14 (R9 proposed extension).** The `/subagents <args>` pre-filter has no
-  clause in R9; R9 only describes a picker with type-to-filter. The design
-  proposes the command argument as the picker's initial filter query. Confirm
-  or drop the extension.
+- **F14 (R9 pre-filter) — settled by the Product update.** R9 (commit
+  `27485fe`) now reads: “Slash arguments pre-filter the picker (`/subagents
+  explore` filters by "explore" on open).” The design sets the command
+  argument as the picker's initial filter query, on the same trimmed,
+  case-insensitive substring rule as type-to-filter. No answer needed.
 - **F15 (R1 compact line colour).** R1 names a colour only for the title line
   ("Title: `Project Team Members N/M` in the theme's base (white) colour") and
   leaves the compact line `sub N` without one; R2/R4/R6 give colours for rows,
   not for this line. The design renders the compact line in
   `theme.text.feedback.success.base`, the same green a working row falls back
   to. Confirm, or name the colour R1 intends.
+- **F16 (R9 picker agent width) — arbitrated by the PM, human decision A1.**
+  R9 names a 96-cell clip for the model label but no number for the agent
+  field. The design adds `PICKER_AGENT_CELLS = 24` (C28): the agent clips to
+  24 cells by the §1.3 rule and never counts against the 96-cell model budget.
+  This is a settled design decision, not an open question; Product R9 does not
+  need a number for it. Recorded here for traceability.
+- **F17 (R6 no context limit) — design decision.** The pure layer
+  (`contextPct`, `src/lib/collect.ts:167`) leaves `pct` unknown when the
+  resolved model has no `limit.context` in the catalog, and the row renders
+  empty muted boxes exactly like unknown usage (R6). No fallback limit is
+  invented: not a provider default, not a nominal window, not `0`. Product R6
+  is the source of the unknown-usage rule. Syncing the session/message cache
+  (§2, G16) changes only availability, not these semantics.

@@ -6,13 +6,18 @@ import type { JSX } from "@opentui/solid"
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import {
   BAR_CELLS,
-  GRACE_MS,
+  BODY_MAX_LINES,
+  DEFAULT_WIDTH,
+  GRACE_TICK_MS,
+  barBand,
   collect,
   elapsed,
   filterRows,
+  isVisibleRole,
   panel,
   matches,
-  truncate,
+  pickerTitle,
+  type AgentInfo,
   type PanelRow,
   type RunningSubagent,
   type Sources,
@@ -48,8 +53,6 @@ type Options = {
 
 type SlotInput = { sessionID?: string }
 
-const DEFAULT_WIDTH = 35
-
 function readOptions(context: Context): Options {
   const raw = context.options ?? {}
   const placement: Placement =
@@ -75,19 +78,71 @@ function sources(context: Context): Sources {
   }
 }
 
-/** Box colour: unknown muted, 70+ red, 50+ yellow, else green. */
+/** Sessions already asked of the host, so each one is synced once (G16). */
+const syncedSessions = new Set<string>()
+
+/** Last sync failure reported, so one broken host call toasts once. */
+let lastSyncFailure: string | undefined
+
+/**
+ * Loads a session and its messages into the TUI data cache, then asks the panel
+ * to recompute so the next pass reads the freshly landed cache. Best effort: a
+ * sync failure is not a panel failure (R11, G16).
+ */
+async function syncSession(context: Context, sessionID: string, bump: () => void) {
+  if (syncedSessions.has(sessionID)) return
+  syncedSessions.add(sessionID)
+  try {
+    await context.data.session.sync(sessionID)
+    bump()
+    await context.data.session.message.sync(sessionID)
+    bump()
+    lastSyncFailure = undefined
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (message !== lastSyncFailure) {
+      lastSyncFailure = message
+      context.ui.toast.show({ message })
+    }
+  }
+}
+
+/** R3, §2: only a child session whose agent names a visible role is synced. */
+function isVisibleChild(
+  agents: AgentInfo[] | undefined,
+  session: { parentID?: string; agent?: string } | undefined,
+): boolean {
+  if (!session?.parentID || !session.agent) return false
+  const agent = agents?.find((entry) => entry.id === session.agent)
+  return agent !== undefined && isVisibleRole(agent)
+}
+
+/** Box colour: the pure band result mapped onto the theme. */
 function barColor(theme: ResolvedTheme, pct: number | undefined) {
-  if (pct === undefined) return theme.text.muted
-  if (pct >= 70) return theme.text.feedback.error.base
-  if (pct >= 50) return theme.text.feedback.warning.base
-  return theme.text.feedback.success.base
+  switch (barBand(pct)) {
+    case "success":
+      return theme.text.feedback.success.base
+    case "warning":
+      return theme.text.feedback.warning.base
+    case "error":
+      return theme.text.feedback.error.base
+    default:
+      return theme.text.muted
+  }
 }
 
 /** Row text colour: grey idle, warning in the failure grace, else agent colour. */
 function rowColor(theme: ResolvedTheme, row: PanelRow): RGBA | string {
   if (row.state === "idle") return theme.text.muted
   if (row.state === "grace") return theme.text.feedback.warning.base
-  if (row.agentColor) return parseColor(row.agentColor)
+  if (row.agentColor) {
+    // An unparseable colour is data, not a plugin error (R11).
+    try {
+      return parseColor(row.agentColor)
+    } catch {
+      return theme.text.feedback.success.base
+    }
+  }
   return theme.text.feedback.success.base
 }
 
@@ -96,64 +151,93 @@ function Seg(props: { fg: RGBA | string; children: string }) {
   return <span style={{ fg: props.fg } as never}>{props.children}</span>
 }
 
+type GoodView = ReturnType<typeof panel>
+
 function Status(props: {
   context: Context
   sessionID?: string
   tick: () => number
+  bump: () => void
   compact: () => boolean
   width: () => number
 }) {
   const [beat, setBeat] = createSignal(0)
+  let lastGood: { view: GoodView; running: number } | undefined
+  let lastFailure: string | undefined
 
-  const rows = createMemo(() => {
-    props.tick()
-    return collect(sources(props.context), props.sessionID)
-  })
-
-  const view = createMemo(() => {
+  // Source reads and view building share one guard: a thrown error keeps the
+  // last good view, reports once per message, and never blanks the slot (R11).
+  const guarded = createMemo(() => {
     props.tick()
     beat()
-    return panel(sources(props.context), props.sessionID, props.width(), 10)
+    try {
+      const data = sources(props.context)
+      const view = panel(data, props.sessionID, props.width(), BODY_MAX_LINES)
+      // Every running instance in scope: queue its sync so the bar fills once it lands (G16).
+      const runningRows = props.sessionID ? collect(data, props.sessionID) : []
+      for (const row of runningRows) void syncSession(props.context, row.sessionID, props.bump)
+      const running = runningRows.length
+      lastFailure = undefined
+      lastGood = { view, running }
+      return lastGood
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (message !== lastFailure) {
+        lastFailure = message
+        props.context.ui.toast.show({ message })
+      }
+      return lastGood
+    }
   })
+
+  const view = () => guarded()?.view
+  const running = () => guarded()?.running ?? 0
 
   // A failed row expires on a clock, not on an event: tick once per second
   // for as long as any row sits inside the 30s grace window.
   createEffect(() => {
-    if (!view().rows.some((row) => row.state === "grace")) return
-    const timer = setInterval(() => setBeat((value) => value + 1), 1000)
+    if (!view()?.rows.some((row) => row.state === "grace")) return
+    const timer = setInterval(() => setBeat((value) => value + 1), GRACE_TICK_MS)
     onCleanup(() => clearInterval(timer))
   })
 
   const theme = props.context.theme
 
   return (
-    <Show when={view().total > 0}>
-      <Show
-        when={!props.compact()}
-        fallback={
-          <text fg={theme.text.feedback.success.base}>{`sub ${rows().length}`}</text>
-        }
-      >
-        <text wrapMode="none">
-          <span style={{ fg: theme.text.base } as never}>
-            {`Project Team Members ${view().working}/${view().total}`}
-          </span>
-          <For each={view().rows}>
-            {(row, index) => (
-              <>
+    <Show
+      when={view()}
+      fallback={<text fg={theme.text.muted}>subagent status unavailable</text>}
+    >
+      {(current) => (
+        <Show when={current().total > 0}>
+          <Show
+            when={!props.compact()}
+            fallback={
+              <text fg={theme.text.feedback.success.base}>{`sub ${running()}`}</text>
+            }
+          >
+            <text wrapMode="none">
+              <span style={{ fg: theme.text.base } as never}>
+                {`Project Team Members ${current().working}/${current().total}`}
+              </span>
+              <For each={current().rows}>
+                {(row) => (
+                  <>
+                    <br />
+                    <Seg fg={rowColor(theme, row)}>{row.head}</Seg>
+                    <Seg fg={barColor(theme, row.pct)}>{FILL.repeat(row.filled)}</Seg>
+                    <Seg fg={theme.text.muted}>{EMPTY.repeat(BAR_CELLS - row.filled)}</Seg>
+                  </>
+                )}
+              </For>
+              <Show when={current().more > 0}>
                 <br />
-                <Seg fg={rowColor(theme, row)}>{row.head}</Seg>
-                <Seg fg={barColor(theme, row.pct)}>{FILL.repeat(row.filled)}</Seg>
-                <Seg fg={theme.text.muted}>{EMPTY.repeat(BAR_CELLS - row.filled)}</Seg>
-              </>
-            )}
-          </For>
-          <Show when={view().more > 0}>
-            <br />
-            <span style={{ fg: theme.text.muted } as never}>{`+${view().more} more · /subagents`}</span>
+                <span style={{ fg: theme.text.muted } as never}>{`+${current().more} more · /subagents`}</span>
+              </Show>
+            </text>
           </Show>
-        </text>
-      </Show>
+        </Show>
+      )}
     </Show>
   )
 }
@@ -180,8 +264,9 @@ function describe(row: RunningSubagent) {
   return [row.title, elapsed(row.since)].filter(Boolean).join(" · ")
 }
 
-async function showDetails(context: Context, sessionID: string | undefined, query?: string) {
-  const rows = filterRows(collect(sources(context), sessionID), query)
+async function showDetails(context: Context, query?: string) {
+  // The picker is global: all running child sessions, not scoped to one tab.
+  const rows = filterRows(collect(sources(context)), query)
   if (rows.length === 0) {
     await context.ui.dialog.alert({
       title: "Subagent models",
@@ -194,7 +279,7 @@ async function showDetails(context: Context, sessionID: string | undefined, quer
     title: `Subagents (${rows.length})`,
     placeholder: "Filter by agent, model, or title",
     options: rows.map((row) => ({
-      title: truncate(`${row.agent} · ${row.model}`, 96),
+      title: pickerTitle(row.agent, row.model),
       value: row.sessionID,
       description: describe(row),
       footer: row.sessionID,
@@ -204,9 +289,9 @@ async function showDetails(context: Context, sessionID: string | undefined, quer
         bind: "alt+o",
         title: "Open session",
         side: "right",
+        // R9: alt+o opens without closing the picker, so no dialog clear here.
         onTrigger: (value) => {
           openSession(context, value)
-          context.ui.dialog.clear()
         },
       },
     ],
@@ -231,12 +316,27 @@ export default Plugin.define({
     const [tick, setTick] = createSignal(0)
     const bump = () => setTick((value) => value + 1)
     const stops = WATCHED_EVENTS.map((type) => context.data.on(type, bump))
+    // New child sessions and executions of a visible role load their usage so
+    // the bars have data to read (G16, section 2). Root and unknown-agent
+    // sessions never reach the data layer here.
+    const syncStops = [
+      context.data.on("session.created", (event) => {
+        if (!isVisibleChild(sources(context).agents, event.data)) return
+        void syncSession(context, event.data.sessionID, bump)
+      }),
+      context.data.on("session.execution.started", (event) => {
+        const session = context.data.session.get(event.data.sessionID)
+        if (!isVisibleChild(sources(context).agents, session)) return
+        void syncSession(context, event.data.sessionID, bump)
+      }),
+    ]
 
     const removeSlot = claim(context, options.placement, (input) => (
       <Status
         context={context}
         sessionID={input.sessionID}
         tick={tick}
+        bump={bump}
         compact={compact}
         width={() => options.width}
       />
@@ -253,7 +353,7 @@ export default Plugin.define({
           palette: true,
           slash: { name: "subagents", aliases: ["subagent-models"], arguments: true },
           enabled: () => true,
-          run: (input) => showDetails(context, currentSessionID(context), input),
+          run: (input) => showDetails(context, input),
         },
         {
           id: "opencode-subagent-model.toggleCompact",
@@ -274,13 +374,8 @@ export default Plugin.define({
     }))
 
     return () => {
-      for (const stop of stops) stop()
+      for (const stop of [...stops, ...syncStops]) stop()
       removeSlot()
     }
   },
 })
-
-function currentSessionID(context: Context) {
-  const current = context.ui.router.current()
-  return current.type === "session" ? current.sessionID : undefined
-}

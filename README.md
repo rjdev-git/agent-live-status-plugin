@@ -91,6 +91,8 @@ The sidebar rows use the short form: the provider's last word (`OpenCode Go` →
 
 The context indicator reads the newest message that reports token usage and divides its prompt size (`input + cache read`) by the model's context limit. Cumulative session tokens are not used: they never fall after compaction, so the bar would never recover. A role row's box shows the fill of its busiest instance.
 
+The plugin syncs each running subagent session (session and messages) into the TUI data layer when the session appears on the panel or when its execution starts, so the context bar can read the newest message's token usage for sessions other than the one you are viewing. A sync failure surfaces as a host toast, and the affected row shows what is loaded. If the resolved model has no `limit.context` in the catalog, the bar renders as unknown usage (empty muted boxes): the plugin never invents a fallback limit.
+
 ## Commands
 
 ### `/subagents`
@@ -104,6 +106,8 @@ It includes:
 - session title
 - elapsed time
 - session ID
+
+The title line is `agent · model`, where the agent clips at 24 cells and the model at 96 cells, each independently cell-aware.
 
 Type to filter the list. Press Enter to open the selected session, or use `alt+o` to open it without closing the picker.
 

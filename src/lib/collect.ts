@@ -41,6 +41,11 @@ export type AgentInfo = {
   color?: string
 }
 
+/** R2: one role per agent that is neither hidden nor primary. */
+export function isVisibleRole(agent: AgentInfo): boolean {
+  return !agent.hidden && agent.mode !== "primary"
+}
+
 export type SessionInfo = {
   id: string
   parentID?: string
@@ -160,9 +165,9 @@ function lastUsage(sources: Sources, sessionID: string): TokenUsage | undefined 
 }
 
 /**
- * Context window used, 0-100, from the newest message's prompt size over the
- * model limit. Cumulative session tokens are wrong here: they never fall
- * after compaction.
+ * Context window used from the newest message's prompt size over the model
+ * limit. Cumulative session tokens are wrong here: they never fall after
+ * compaction. Not clamped: over-limit reports above 100, only the fill clamps.
  */
 export function contextPct(session: SessionInfo, sources: Sources): number | undefined {
   const limit = contextLimit(modelRef(session, sources), sources.models)
@@ -170,7 +175,7 @@ export function contextPct(session: SessionInfo, sources: Sources): number | und
   if (!limit || !usage) return undefined
   const used = usage.input + (usage.cache?.read ?? 0)
   if (!Number.isFinite(used) || used < 0) return undefined
-  return Math.min(100, (used / limit) * 100)
+  return (used / limit) * PERCENT
 }
 
 /** Collapses newlines and repeated spaces so titles stay on one line. */
@@ -213,62 +218,155 @@ export function collect(sources: Sources, sessionID?: string): RunningSubagent[]
   return rows
 }
 
-type Tally = { value: string; count: number }
-
-function tally(values: string[]): Tally[] {
-  const counts = new Map<string, number>()
-  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1)
-  return [...counts].map(([value, count]) => ({ value, count }))
-}
-
-function withCount(entry: Tally): string {
-  return entry.count > 1 ? `${entry.value} x${entry.count}` : entry.value
-}
-
-/**
- * One row: `sub explore · Provider/Model (high)`.
- * Several: `sub 3 · explore · Provider/Model (high) x3`.
- */
-export function summary(rows: RunningSubagent[]): string {
-  if (rows.length === 0) return ""
-  if (rows.length === 1) return `sub ${rows[0].agent} · ${rows[0].model}`
-
-  const agents = tally(rows.map((row) => row.agent))
-  const models = tally(rows.map((row) => row.model))
-  const agentPart = agents.length === 1 ? agents[0].value : agents.map(withCount).join(", ")
-  return `sub ${rows.length} · ${agentPart} · ${models.map(withCount).join(", ")}`
-}
-
-/** `42s`, `3m`, `1h 2m`. Empty when the start time is unknown. */
-/** Sidebar row budget. Numbers are reserved for two digits, so rows stay aligned. */
-export const MAX_ROWS = 20
-
 /** Width of the context indicator, in boxes. */
 export const BAR_CELLS = 5
 
+/** Row width in cells when the width option is absent. */
+export const DEFAULT_WIDTH = 35
+
+/** Body lines: role and instance rows; the title and overflow line excluded. */
+export const BODY_MAX_LINES = 10
+
+/** Digits reserved for the role number, so ` 1.` and `20.` align. */
+export const ROLE_NUMBER_DIGITS = 2
+
+/** Role number field: two digits plus the dot. */
+export const ROLE_NUMBER_CELLS = 3
+
 /** Agent names are clipped to this many cells so the model column aligns. */
-export const AGENT_CELLS = 9
+export const ROLE_NAME_CELLS = 9
+
+/** Space between the agent name field and the model column. */
+export const ROLE_NAME_GAP_CELLS = 1
+
+/** Hard cap on the role model label text, so a wide sidebar does not stretch it. */
+export const ROLE_MODEL_MAX_CELLS = 20
+
+/** Every role row cell except the model column: number, name, gaps, boxes. */
+export const ROLE_FIXED_CELLS = 19
+
+/** Gap between the role model column and the boxes. */
+export const ROLE_BAR_GAP_CELLS = 1
+
+/** Instance indent: space, tree glyph, space. */
+export const INSTANCE_INDENT_CELLS = 3
 
 /** Instance titles are clipped to this many cells. */
-export const INSTANCE_CELLS = 8
+export const INSTANCE_TITLE_CELLS = 8
+
+/** Space between the instance title field and the model column. */
+export const INSTANCE_TITLE_GAP_CELLS = 1
 
 /** Instance model labels are clipped to this many cells. */
 export const INSTANCE_MODEL_CELLS = 12
 
-/** Everything in a row except the model label: number, agent, spaces, boxes. */
-const ROW_FIXED_CELLS = 19
+/** Every instance row cell except the model column: indent, title, gaps, boxes. */
+export const INSTANCE_FIXED_CELLS = 18
 
-export type RowLayout = {
-  /** Number, agent, model, and the gap before the boxes. */
-  head: string
-  /** Filled boxes, 0-5. */
-  filled: number
-  /** Context used, 0-100. Unknown when the session reports no usage. */
-  pct?: number
+/** Gap between the instance model column and the boxes. */
+export const INSTANCE_BAR_GAP_CELLS = 1
+
+/** Percentage scale: a full context window is 100. */
+export const PERCENT = 100
+
+/** Lower fill clamp, so a negative percentage repeats no boxes. */
+export const BAR_MIN_FILL = 0
+
+/** Percentage at which the bar enters the warning band. */
+export const WARNING_MIN_PCT = 50
+
+/** Percentage at which the bar enters the error band. */
+export const ERROR_MIN_PCT = 70
+
+/** Grace window for a failed or interrupted instance row, in milliseconds. */
+export const GRACE_MS = 30_000
+
+/** Period of the ticker that expires grace rows, in milliseconds. */
+export const GRACE_TICK_MS = 1_000
+
+/** Cell budget for the picker's model label. */
+export const PICKER_MODEL_CELLS = 96
+
+/** Cell budget for the picker's agent field. */
+export const PICKER_AGENT_CELLS = 24
+
+/** Cells reserved for the ellipsis at the end of a clipped label. */
+export const ELLIPSIS_CELLS = 1
+
+/** The provider may take at most this share of a split model field. */
+export const PROVIDER_MAX_SHARE = 1 / 2
+
+/** Below this a row cannot hold its fields, so the configured width is raised. */
+const MIN_ROW_CELLS = 19
+
+/** Zero-cell code points: combining marks attach to the preceding cell. */
+const ZERO_CELL_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x0300, 0x036f],
+  [0x1ab0, 0x1aff],
+  [0x1dc0, 0x1dff],
+  [0x20d0, 0x20ff],
+  [0xfe20, 0xfe2f],
+]
+
+/** Two-cell code points: East Asian Wide and Fullwidth. */
+const WIDE_CELL_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x1100, 0x115f],
+  [0x2e80, 0x303e],
+  [0x3041, 0x33ff],
+  [0x3400, 0x4dbf],
+  [0x4e00, 0x9fff],
+  [0xa000, 0xa4cf],
+  [0xac00, 0xd7a3],
+  [0xf900, 0xfaff],
+  [0xfe30, 0xfe4f],
+  [0xff00, 0xff60],
+  [0xffe0, 0xffe6],
+  [0x1f300, 0x1f64f],
+  [0x1f900, 0x1f9ff],
+  [0x20000, 0x3fffd],
+]
+
+function inRanges(code: number, ranges: ReadonlyArray<readonly [number, number]>): boolean {
+  return ranges.some(([low, high]) => code >= low && code <= high)
 }
 
-/** Hard cap on the model label, so a wide sidebar does not stretch it. */
-const MAX_MODEL_CELLS = 20
+/** Display cells of one code point: 0 combining, 2 wide, else 1. */
+function charCells(char: string): number {
+  const code = char.codePointAt(0) ?? 0
+  if (inRanges(code, ZERO_CELL_RANGES)) return 0
+  if (inRanges(code, WIDE_CELL_RANGES)) return 2
+  return 1
+}
+
+/** Terminal cells a string occupies. */
+export function cellWidth(text: string): number {
+  let cells = 0
+  for (const char of text) cells += charCells(char)
+  return cells
+}
+
+/** Clips `text` to `cells` display cells, reserving one for the ellipsis. */
+export function clip(text: string, cells: number): string {
+  if (cells <= 0) return ""
+  if (cellWidth(text) <= cells) return text
+  if (cells === 1) return "…"
+  const budget = cells - ELLIPSIS_CELLS
+  let shown = ""
+  let used = 0
+  for (const char of text) {
+    const width = charCells(char)
+    if (used + width > budget) break
+    shown += char
+    used += width
+  }
+  return `${shown}…`
+}
+
+/** Pads `text` with spaces to exactly `cells` display cells. */
+function padCells(text: string, cells: number): string {
+  const width = cellWidth(text)
+  return width >= cells ? text : `${text}${" ".repeat(cells - width)}`
+}
 
 /**
  * Fits `Provider/Model` into `budget` cells. When it overflows, the provider
@@ -276,44 +374,54 @@ const MAX_MODEL_CELLS = 20
  * cannot eat the model.
  */
 export function fitModel(label: string, budget: number): string {
-  if (label.length <= budget) return label
+  if (budget < 3) return clip(label, budget)
+  if (cellWidth(label) <= budget) return label
   const slash = label.indexOf("/")
-  if (slash < 0) return truncate(label, budget)
+  if (slash < 0) return clip(label, budget)
 
   const provider = label.slice(0, slash)
   const model = label.slice(slash + 1)
-  const providerCells = Math.max(1, Math.floor(budget / 2) - 1)
-  const shownProvider = truncate(provider, providerCells)
-  const modelCells = Math.max(1, budget - shownProvider.length - 1)
-  return `${shownProvider}/${truncate(model, modelCells)}`
+  const providerCells = Math.floor(budget * PROVIDER_MAX_SHARE) - 1
+  const shownProvider = clip(provider, providerCells)
+  const modelCells = budget - cellWidth(shownProvider) - 1
+  return `${shownProvider}/${clip(model, modelCells)}`
 }
 
-/**
- * Numbered sidebar rows plus the count of rows past the cap. Oldest first, so
- * a new subagent appends at the bottom and numbering stays stable.
- */
-export function layout(rows: RunningSubagent[], width = 35, max = MAX_ROWS) {
-  const budget = Math.max(4, Math.min(MAX_MODEL_CELLS, width - ROW_FIXED_CELLS))
-  const ordered = [...rows].sort((left, right) => (left.since ?? Infinity) - (right.since ?? Infinity))
-  const shown = ordered.slice(0, max)
-
-  return {
-    rows: shown.map((row, index): RowLayout => {
-      const agent = truncate(row.agent, AGENT_CELLS).padEnd(AGENT_CELLS)
-      const model = fitModel(row.modelShort ?? row.model, budget).padEnd(budget)
-      const filled =
-        row.pct === undefined
-          ? 0
-          : Math.min(BAR_CELLS, Math.max(0, Math.round((row.pct * BAR_CELLS) / 100)))
-      const number = String(index + 1).padStart(2)
-      return { head: `${number}.${agent} ${model} `, filled, pct: row.pct }
-    }),
-    more: Math.max(0, ordered.length - shown.length),
-  }
+/** Picker title line: `agent · model`, each side clipped on its own budget (C28, C29). */
+export function pickerTitle(agent: string, model: string): string {
+  return `${clip(agent, PICKER_AGENT_CELLS)} · ${clip(model, PICKER_MODEL_CELLS)}`
 }
 
-/** Grace window for a failed or interrupted instance row, in milliseconds. */
-export const GRACE_MS = 30_000
+function effectiveWidth(width: number): number {
+  return Math.max(MIN_ROW_CELLS, width)
+}
+
+function roleColumn(width: number): number {
+  return effectiveWidth(width) - ROLE_FIXED_CELLS
+}
+
+function instanceColumn(width: number): number {
+  return effectiveWidth(width) - INSTANCE_FIXED_CELLS
+}
+
+/** Role row text: number, agent name, model column, and the gap before boxes. */
+function roleHead(index: number, name: string, model: string, width: number): string {
+  const column = roleColumn(width)
+  const number = String(index).padStart(ROLE_NUMBER_DIGITS)
+  const agent = padCells(clip(name, ROLE_NAME_CELLS), ROLE_NAME_CELLS)
+  const modelField = model
+    ? padCells(fitModel(model, Math.min(column, ROLE_MODEL_MAX_CELLS)), column)
+    : " ".repeat(column)
+  return `${number}.${agent}${" ".repeat(ROLE_NAME_GAP_CELLS)}${modelField}${" ".repeat(ROLE_BAR_GAP_CELLS)}`
+}
+
+/** Instance row text: indent, title, model column, and the gap before boxes. */
+function instanceHead(glyph: "├" | "└", title: string, model: string, width: number): string {
+  const column = instanceColumn(width)
+  const shownTitle = padCells(clip(cleanTitle(title), INSTANCE_TITLE_CELLS), INSTANCE_TITLE_CELLS)
+  const modelField = padCells(fitModel(model, Math.min(column, INSTANCE_MODEL_CELLS)), column)
+  return ` ${glyph} ${shownTitle}${" ".repeat(INSTANCE_TITLE_GAP_CELLS)}${modelField}${" ".repeat(INSTANCE_BAR_GAP_CELLS)}`
+}
 
 export type RowState = "idle" | "active" | "grace"
 
@@ -325,7 +433,7 @@ export type PanelRow = {
   head: string
   /** Filled boxes, 0-5. Empty for an idle role row. */
   filled: number
-  /** Context used, 0-100. Unknown when the session reports no usage. */
+  /** Context used. Unknown when the session reports no usage. */
   pct?: number
   state: RowState
   /** Agent-definition colour, applied while a row is not idle. */
@@ -340,30 +448,56 @@ type Section = {
   instances: Array<{ session: SessionInfo; state: "active" | "grace" }>
 }
 
+export type BarBand = "muted" | "success" | "warning" | "error"
+
+/** Context boxes filled by `pct`, clamped to 0-`BAR_CELLS`. */
+export function barFill(pct: number | undefined): number {
+  if (pct === undefined) return BAR_MIN_FILL
+  const filled = Math.round((pct * BAR_CELLS) / PERCENT)
+  return Math.min(BAR_CELLS, Math.max(BAR_MIN_FILL, filled))
+}
+
+/** Colour band derived from `pct` alone, never from the row text colour. */
+export function barBand(pct: number | undefined): BarBand {
+  if (pct === undefined) return "muted"
+  if (pct < WARNING_MIN_PCT) return "success"
+  if (pct < ERROR_MIN_PCT) return "warning"
+  return "error"
+}
+
+/** Earliest instance creation; missing timestamps sort last. */
+function firstCreated(section: Section): number {
+  return Math.min(...section.instances.map((one) => one.session.time?.created ?? Infinity))
+}
+
+function compareNames(left: Section, right: Section): number {
+  const byName = left.name.toLowerCase().localeCompare(right.name.toLowerCase())
+  return byName !== 0 ? byName : left.agentID.localeCompare(right.agentID)
+}
+
 /**
  * The whole sidebar as data: numbered role rows with tree-glyph instance rows
  * nested under them. Running sessions and sessions inside the failure grace
  * window become instances; every other agent is an idle role row. Body lines
  * are capped at `maxLines`: roles with instances first (oldest instance
  * first), then idle roles alphabetically, so an instance never separates from
- * its role row. Instances are scoped to the tab the viewer is in.
+ * its role row. The body stops at the first section that does not fit.
  */
 export function panel(
   sources: Sources,
   sessionID?: string,
-  width = 35,
-  maxLines = 10,
+  width = DEFAULT_WIDTH,
+  maxLines = BODY_MAX_LINES,
   now = Date.now(),
   graceMs = GRACE_MS,
 ) {
-  const budget = Math.max(4, Math.min(MAX_MODEL_CELLS, width - ROW_FIXED_CELLS))
+  const W = effectiveWidth(width)
   const shortLabel = labeler(sources.models, sources.providers, true)
-  const label = (ref: ModelRef | undefined) => (ref ? shortLabel(ref) : "")
+  const roleLabel = (ref: ModelRef | undefined) => (ref ? shortLabel(ref) : "")
 
-  const roles = (sources.agents ?? []).filter(
-    (agent) => !agent.hidden && agent.mode !== "primary",
-  )
+  const roles = (sources.agents ?? []).filter(isVisibleRole)
   const byID = new Map(roles.map((agent) => [agent.id, agent]))
+  // No viewed tab means an empty instance set, never every tab (F11).
   const scope = sessionID ? sources.sessions.root(sessionID) : undefined
   const rootCache = new Map<string, string>()
   const rootOf = (id: string) => {
@@ -375,148 +509,185 @@ export function panel(
   }
 
   const sections = new Map<string, Section>()
-  for (const session of sources.sessions.list()) {
-    if (!session.parentID || !session.agent) continue
-    if (scope && rootOf(session.id) !== scope) continue
-    const agent = byID.get(session.agent)
-    if (!agent) continue
+  if (scope !== undefined) {
+    for (const session of sources.sessions.list()) {
+      if (!session.parentID || !session.agent) continue
+      if (rootOf(session.id) !== scope) continue
+      const agent = byID.get(session.agent)
+      if (!agent) continue
 
-    const running = sources.sessions.status(session.id) === "running"
-    const ended = session.time?.updated ?? session.time?.created
-    const stoppedBad = session.outcome === "failed" || session.outcome === "interrupted"
-    const inGrace = !running && stoppedBad && ended !== undefined && now - ended <= graceMs
-    const state: "active" | "grace" | undefined = running ? "active" : inGrace ? "grace" : undefined
-    if (!state) continue
+      const running = sources.sessions.status(session.id) === "running"
+      const ended = session.time?.updated ?? session.time?.created
+      const stoppedBad = session.outcome === "failed" || session.outcome === "interrupted"
+      const elapsedMs = ended === undefined ? undefined : now - ended
+      // Half-open: exactly the window length is already folded (F4).
+      const inGrace =
+        !running &&
+        stoppedBad &&
+        elapsedMs !== undefined &&
+        elapsedMs >= 0 &&
+        elapsedMs < graceMs
+      const state: "active" | "grace" | undefined = running
+        ? "active"
+        : inGrace
+          ? "grace"
+          : undefined
+      if (!state) continue
 
-    let entry = sections.get(session.agent)
-    if (!entry) {
-      entry = {
-        agentID: session.agent,
-        name: agent.name ?? session.agent,
-        color: agent.color,
-        model: label(agent.model),
-        instances: [],
+      let entry = sections.get(session.agent)
+      if (!entry) {
+        entry = {
+          agentID: session.agent,
+          name: agent.name ?? session.agent,
+          color: agent.color,
+          model: roleLabel(agent.model),
+          instances: [],
+        }
+        sections.set(session.agent, entry)
       }
-      sections.set(session.agent, entry)
+      entry.instances.push({ session, state })
     }
-    entry.instances.push({ session, state })
   }
 
-  const active = [...sections.values()].filter((entry) =>
-    entry.instances.some((one) => one.state === "active"),
-  )
-  const grace = [...sections.values()].filter((entry) =>
-    entry.instances.every((one) => one.state === "grace"),
-  )
+  const busy = [...sections.values()]
+  busy.sort((left, right) => {
+    const a = firstCreated(left)
+    const b = firstCreated(right)
+    if (a < b) return -1
+    if (a > b) return 1
+    return compareNames(left, right)
+  })
+  for (const section of busy) {
+    section.instances.sort((left, right) => {
+      const a = left.session.time?.created ?? Infinity
+      const b = right.session.time?.created ?? Infinity
+      if (a < b) return -1
+      if (a > b) return 1
+      return left.session.id.localeCompare(right.session.id)
+    })
+  }
+
   const idle = roles
     .filter((agent) => !sections.has(agent.id))
     .map((agent) => ({
       agentID: agent.id,
       name: agent.name ?? agent.id,
       color: agent.color,
-      model: label(agent.model),
+      model: roleLabel(agent.model),
       instances: [],
     }))
-  idle.sort((left, right) => left.name.toLowerCase().localeCompare(right.name.toLowerCase()))
-  active.sort((left, right) =>
-    Math.min(...left.instances.map((one) => one.session.time?.created ?? Infinity)) -
-    Math.min(...right.instances.map((one) => one.session.time?.created ?? Infinity)),
-  )
+  idle.sort(compareNames)
 
   const rows: PanelRow[] = []
   let more = 0
   let number = 0
 
-  const roleLine = (
+  const pushRole = (
     agentName: string,
     model: string,
     state: RowState,
-    color?: string,
-    filled = 0,
+    pct: number | undefined,
+    color: string | undefined,
+    filled: number,
   ) => {
     number += 1
     rows.push({
-      head: roleHead(number, agentName, model, budget),
+      head: roleHead(number, agentName, model, W),
       filled,
+      pct,
       state,
       agentColor: color,
     })
   }
-  const instanceLine = (glyph: "├" | "└", instance: Section["instances"][number], color?: string) => {
-    const title = truncate(cleanTitle(instance.session.title ?? instance.session.id), INSTANCE_CELLS)
-    const model = fitModel(shortLabelOf(instance.session, sources, label), INSTANCE_MODEL_CELLS)
+  const pushInstance = (
+    glyph: "├" | "└",
+    instance: Section["instances"][number],
+    color?: string,
+  ) => {
+    const pct = contextPct(instance.session, sources)
     rows.push({
-      head: ` ${glyph} ${title.padEnd(INSTANCE_CELLS)} ${model.padEnd(budget + 1)} `,
-      filled: fillFor(instance.session, sources),
-      pct: contextPct(instance.session, sources),
+      head: instanceHead(
+        glyph,
+        instance.session.title ?? instance.session.id,
+        instanceLabel(instance.session, sources, shortLabel),
+        W,
+      ),
+      filled: barFill(pct),
+      pct,
       state: instance.state,
       agentColor: color,
     })
   }
 
-  for (const entry of active) {
-    const lines = entry.instances.length + 1
-    if (rows.length + lines > maxLines) {
-      more += lines
-      continue
-    }
-    const busiest = Math.max(...entry.instances.map((one) => fillFor(one.session, sources)))
-    roleLine(entry.name, entry.model, "active", entry.color, busiest)
-    entry.instances.forEach((one, index) => {
-      instanceLine(index === entry.instances.length - 1 ? "└" : "├", one, entry.color)
+  type RenderableSection = { lines: number; emit: () => void }
+  const sectionsToEmit: RenderableSection[] = []
+
+  for (const section of busy) {
+    const active = section.instances.some((one) => one.state === "active")
+    const state: RowState = active ? "active" : "grace"
+    const known = section.instances
+      .map((one) => contextPct(one.session, sources))
+      .filter((value): value is number => value !== undefined)
+    // The role row carries the busiest instance's percentage, so its boxes
+    // take the same band as that instance (G13).
+    const pct = known.length > 0 ? Math.max(...known) : undefined
+    const filled = active ? barFill(pct) : 0
+    sectionsToEmit.push({
+      lines: section.instances.length + 1,
+      emit: () => {
+        pushRole(
+          section.name,
+          section.model,
+          state,
+          active ? pct : undefined,
+          active ? section.color : undefined,
+          filled,
+        )
+        section.instances.forEach((one, index) => {
+          pushInstance(index === section.instances.length - 1 ? "└" : "├", one, section.color)
+        })
+      },
     })
   }
-  for (const entry of grace) {
-    if (rows.length + entry.instances.length + 1 > maxLines) {
-      more += entry.instances.length + 1
-      continue
-    }
-    roleLine(entry.name, entry.model, "grace", undefined)
-    entry.instances.forEach((one, index) => {
-      instanceLine(index === entry.instances.length - 1 ? "└" : "├", one, entry.color)
+  for (const role of idle) {
+    sectionsToEmit.push({
+      lines: 1,
+      emit: () => pushRole(role.name, role.model, "idle", undefined, role.color, 0),
     })
   }
-  for (const entry of idle) {
-    if (rows.length >= maxLines) {
-      more += 1
-      continue
+
+  for (let index = 0; index < sectionsToEmit.length; index++) {
+    const section = sectionsToEmit[index]
+    if (rows.length + section.lines > maxLines) {
+      // First non-fitting section stops the body: it and every later section fold.
+      for (let rest = index; rest < sectionsToEmit.length; rest++) {
+        more += sectionsToEmit[rest].lines
+      }
+      break
     }
-    roleLine(entry.name, entry.model, "idle", entry.color)
+    section.emit()
   }
 
   return {
     rows,
     more,
-    working: active.length,
+    working: busy.filter((section) => section.instances.some((one) => one.state === "active"))
+      .length,
     total: roles.length,
   }
 }
 
-/** Short model label for an instance, falling back through the agent model. */
-function shortLabelOf(
+/** Instance model label: R8 resolution's short label, else `unknown model`. */
+function instanceLabel(
   session: SessionInfo,
   sources: Sources,
-  label: (ref: ModelRef | undefined) => string,
+  shortLabel: (ref: ModelRef) => string,
 ): string {
-  const ref = modelRef(session, sources) ?? sources.agents?.find((a) => a.id === session.agent)?.model
-  return ref ? label(ref) : ""
+  const ref = modelRef(session, sources)
+  return ref ? shortLabel(ref) : UNKNOWN_MODEL
 }
 
-/** Context boxes filled by the newest message usage, 0-5. */
-function fillFor(session: SessionInfo, sources: Sources): number {
-  const pct = contextPct(session, sources)
-  if (pct === undefined) return 0
-  return Math.min(BAR_CELLS, Math.max(0, Math.round((pct * BAR_CELLS) / 100)))
-}
-
-/** Role row text: number, agent name, model field, and the gap before boxes. */
-function roleHead(index: number, name: string, model: string, budget: number): string {
-  const number = String(index).padStart(2)
-  const agent = truncate(name, AGENT_CELLS).padEnd(AGENT_CELLS)
-  const modelField = model ? fitModel(model, budget).padEnd(budget) : " ".repeat(budget)
-  return `${number}.${agent} ${modelField} `
-}
-
+/** `42s`, `3m`, `1h 2m`. Empty when the start time is unknown. */
 export function elapsed(since: number | undefined, now = Date.now()): string {
   if (!since) return ""
   const seconds = Math.max(0, Math.round((now - since) / 1000))
@@ -527,13 +698,6 @@ export function elapsed(since: number | undefined, now = Date.now()): string {
   return `${hours}h ${minutes % 60}m`
 }
 
-export function truncate(value: string, width: number): string {
-  if (width <= 0) return ""
-  if (value.length <= width) return value
-  if (width === 1) return "…"
-  return `${value.slice(0, width - 1)}…`
-}
-
 /** Case-insensitive substring match across `fields`. An empty query always matches. */
 export function matches(query: string | undefined, ...fields: string[]): boolean {
   const needle = query?.trim().toLowerCase()
@@ -541,7 +705,13 @@ export function matches(query: string | undefined, ...fields: string[]): boolean
   return fields.join(" ").toLowerCase().includes(needle)
 }
 
-/** Case-insensitive match on agent, model, title, and session ID. */
-export function filterRows(rows: RunningSubagent[], query: string | undefined): RunningSubagent[] {
-  return rows.filter((row) => matches(query, row.agent, row.model, row.title, row.sessionID))
+/** Case-insensitive match on agent, model, title, elapsed text, and session ID. */
+export function filterRows(
+  rows: RunningSubagent[],
+  query: string | undefined,
+  now = Date.now(),
+): RunningSubagent[] {
+  return rows.filter((row) =>
+    matches(query, row.agent, row.model, row.title, elapsed(row.since, now), row.sessionID),
+  )
 }

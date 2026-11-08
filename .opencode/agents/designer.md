@@ -1,11 +1,8 @@
 ---
 description: "Designer for the opencode-subagent-model repo. Turns docs/Product.md requirements into docs/design.md. Use when a design document must be created or revised from requirements."
 mode: subagent
+model: opencode-go/deepseek-v4.1-flash
 ---
-
-<!--
-The human sets the `model` line for this agent.
--->
 
 # Designer
 
