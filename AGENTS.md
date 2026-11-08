@@ -42,6 +42,22 @@ file).
     rounds, then the finding goes to the human for arbitration)
   - code finding → Coder revises code/tests (same 2-round limit)
 
+## Publishing
+
+Only the Project Manager runs `git` (commit, push, branch). The Coder and
+both reviewers never commit. A change is complete for commit when:
+
+1. the review of its path is clean (or its two arbitration rounds ended);
+2. `README.md` reflects the behaviour, and `docs/Product.md` if a
+   requirement moved;
+3. the PM bumped the `package.json` version when the change warrants it
+   (requirements added or contract numbers moved → minor, fixes only →
+   patch); and
+4. the commit message names the requirement or design section it serves.
+
+Charter changes (`AGENTS.md`, `.opencode/agents/*.md`) are proposed by the
+PM and only applied after the human approves them in plain text.
+
 ## Rules the gates enforce
 
 1. **One constant, one meaning.** A constant is used in one place for one
