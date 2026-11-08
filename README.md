@@ -8,7 +8,7 @@ This plugin shows which model each active subagent is using, so you can quickly 
 
 It is especially useful when you use different models for your main agent and subagents and want to confirm that each subagent is using the intended model from its configuration.
 
-Current version: `0.9.0`
+Current version: `1.0.0`
 
 Project renamed to `subagent-live-status-plugin` (was `opencode-subagent-model`); plugin id, storage namespace, and command ids move with it — the persisted compact toggle resets once.
 
@@ -26,18 +26,20 @@ Project renamed to `subagent-live-status-plugin` (was `opencode-subagent-model`)
 
 ## Example output
 
-A tree of agent roles. A role shows the agent definition; every running instance nests under it with its session title, model, and speed bar:
+A tree of agent roles. A role shows the agent definition; every running instance nests under it with its session title, model (only when it differs from the role's model), and speed bar:
 
 ```text
 Project Team Members 1/5
- 1.explore   Go/Kimi K3.1 Pro ▓▓▓░░
+ 1.explore   [built-in]       ▓▓▓░░
  ├ Inspect… Go/Grok 4.7       ▓▓▓▓░
- └ Audit r… Go/MiniMax …      ▓░░░░
+ └ Audit r…                   ▓░░░░
  2.reviewer                   ░░░░░
  3.qa                         ░░░░░
  4.writer                     ░░░░░
  5.research…                  ░░░░░
 ```
+
+`explore` is a built-in agent working a task in a repo that also has `.opencode/agents` definitions: its role row shows the fixed `[built-in]` tag instead of a model. Its `Inspect…` instance runs a different model, so the model shows; its `Audit r…` instance uses the role's model, so the model cell is omitted. Charter-role rows (`reviewer` and friends) show their definition model instead of the tag.
 
 States:
 
@@ -77,6 +79,9 @@ sub 3
 
 - Live team tree in the session UI (`sidebar.content` by default)
 - Role rows with configured model, instance rows with live model and speed
+- Built-in agents working in a repo with agent definitions get a temporary
+  `[built-in]` role row (no model) while their session runs
+- Instance model shows only when it differs from the role's model
 - `/subagents` command and `/subagent-models` alias
 - Palette command: `Show running subagent models`
 - Palette command: `Toggle compact subagent status`
@@ -91,14 +96,14 @@ A session becomes an instance row when it is a child session currently marked `r
 
 The title counts how many roles have a working instance.
 
-It resolves the model in this order:
+It resolves the instance model in this order:
 
 1. the session model
 2. the subagent's configured agent model
 3. the nearest parent session model
 4. `unknown model`
 
-So an instance may show a model different from its role's `agent.md` — a per-session override wins.
+So an instance may resolve a model different from its role's `agent.md` — a per-session override wins. The panel shows the instance's model label only when it carries information: when the resolved model differs from the role's own resolved model, or when the instance's model is unknown. When the labels agree, the model cell is omitted and the row keeps its geometry. A built-in role row never shows a model — it shows the `[built-in]` tag — and its instances keep showing their model (when it carries information, per A.10).
 
 The displayed label follows the format `ProviderName/ModelName`, and appends ` (variant)` when relevant. If a label is missing, the plugin falls back to the provider or model ID.
 

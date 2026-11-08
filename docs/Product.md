@@ -43,6 +43,11 @@ selection is human decision A.8:
   least one child session in flight, that built-in gets a temporary role row
   under the R3/R4 lifecycle. When no session of it remains, the row
   disappears entirely.
+- A built-in agent's role row shows no model label (human decision A.9):
+  where member rows show the definition's short model label, a built-in row
+  — temporary in charter mode, permanent in built-in mode — instead carries
+  a `[built-in]` tag beside the role name. Instance rows of a built-in keep
+  their model label and never carry the tag.
 
 Rows carry:
 
@@ -62,6 +67,12 @@ currently viewed (other tabs' sessions are invisible here).
   Unnumbered.
 - Fields in order: session title (max 8 cells, clipped with `…`), model
   short label (max 12 cells via R5's split rule), speed bar (5 boxes, R6).
+  The model label renders only when it carries information (human decision
+  A.10): when the instance's resolved model differs from the role's own
+  resolved model, or when the instance's model is unknown. When the labels
+  agree, the model cell is omitted. How the row lays out when the field is
+  absent is a design decision; the comparison itself is done on the
+  resolved labels before any clipping.
 - Colour: same rule as the working role row.
 - A succeeded instance disappears immediately: its row collapses back into
   the role row. A failed or interrupted instance does not — it follows
@@ -91,6 +102,26 @@ Both row shapes are exactly `width` cells wide; the boxes always occupy the
 last 5 columns, aligned across rows.
 
 - `width` option, default 35 cells.
+- Dynamic width (human decision A.11): the panel derives its row width from
+  the host's reactive sidebar width in CSS pixels divided by the `cellPx`
+  option (default 8), rounded. The configured `width` stays as the fallback
+  when detection is unavailable and as the cap when detection succeeds — the
+  panel is never wider than the `width` option. Detection is unavailable
+  while the host reports no width (not loaded, sidebar closed/transitioning,
+  or the panel not rendered in the side region); then the configured `width`
+  governs, floor `MIN_ROW_CELLS` as before.
+- Proportional fields (A.11): on a role row the "rest" (width − 3 number − 1
+  gap − 1 separator − 5 boxes) splits between the name field and the model
+  field — name gets 40% rounded, model gets the remainder. On an instance
+  row the same rest splits between the title field and the model field, but
+  the title field stays capped at its 8-cell maximum (any unused title
+  cells go to the model field). Name/title floor 6 cells, model field floor
+  4 cells; whenever a floor binds (or detection is unavailable), the
+  previous fixed-field arithmetic governs instead.
+- Fixed under A.11: the two-digit number (3 cells), both gap/separator
+  cells (1 each), the 5 speed boxes, and the `[built-in]` tag — the tag
+  keeps its fixed 10-cell rendering inside whatever model field the split
+  yields, it is never proportional.
 - Model label rule: when `Provider/Model` overflows its field, the provider
   keeps at most half of it, and the model name gets whatever remains; the
   whole label clips to `field - 1` characters plus `…`.
@@ -159,7 +190,8 @@ keybind via `bind`.
 
 - `Show running subagent models` — opens the picker.
 - `Toggle compact subagent status` — toggles compact between sessions,
-  persisted, toast feedback, hidden when the config forces `compact`.
+  persisted, toast feedback, disabled (but still shown in the palette) when
+  the config forces `compact`.
 
 ## R11 — Failure-free
 

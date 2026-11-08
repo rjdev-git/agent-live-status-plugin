@@ -23,7 +23,6 @@ import {
   memberSet,
   modelRef,
   panel,
-  matches,
   pickerTitle,
   speedTps,
   type AgentInfo,
@@ -412,10 +411,12 @@ async function showDetails(context: Context, query?: string) {
         },
       },
     ],
-    search: (value, options) =>
-      options.filter((option) =>
-        matches(value, option.title, option.description ?? "", option.footer ?? ""),
-      ),
+    // R9: filter the raw records, never the clipped display strings, so a term
+    // that only matches a clipped-away tail still finds its row.
+    search: (value, options) => {
+      const keep = new Set(filterRows(rows, value).map((row) => row.sessionID))
+      return options.filter((option) => keep.has(option.value))
+    },
   })
 
   if (choice) openSession(context, choice)

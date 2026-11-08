@@ -53,6 +53,13 @@ export const BUILTIN_AGENT_IDS: ReadonlyArray<string> = [
   "title",
 ]
 
+/**
+ * C33: the built-in role's model-slot text. It is a tag, not a model label:
+ * it never passes through `fitModel` and is not capped by
+ * `ROLE_MODEL_MAX_CELLS` (A.9, C34).
+ */
+export const BUILTIN_TAG_TEXT = "[built-in]"
+
 /** A.8 member-selection mode: charter definitions or the host builtins. */
 export type PanelMode = "charter" | "builtin"
 
@@ -450,22 +457,46 @@ function instanceColumn(width: number): number {
   return effectiveWidth(width) - INSTANCE_FIXED_CELLS
 }
 
-/** Role row text: number, agent name, and the model column. */
-function roleHead(index: number, name: string, model: string, width: number): string {
+/**
+ * Role row text: number, agent name, and the model column. A built-in role
+ * puts `BUILTIN_TAG_TEXT` in the model column instead of reading a model
+ * (A.9, C34).
+ */
+function roleHead(
+  index: number,
+  name: string,
+  model: string,
+  width: number,
+  builtin: boolean,
+): string {
   const column = roleColumn(width)
   const number = String(index).padStart(ROLE_NUMBER_DIGITS)
   const agent = padCells(clip(name, ROLE_NAME_CELLS), ROLE_NAME_CELLS)
-  const modelField = model
-    ? padCells(fitModel(model, Math.min(column, ROLE_MODEL_MAX_CELLS)), column)
-    : " ".repeat(column)
+  const modelField = builtin
+    ? padCells(clip(BUILTIN_TAG_TEXT, column), column)
+    : model
+      ? padCells(fitModel(model, Math.min(column, ROLE_MODEL_MAX_CELLS)), column)
+      : " ".repeat(column)
   return `${number}.${agent}${" ".repeat(ROLE_NAME_GAP_CELLS)}${modelField}${" ".repeat(ROLE_BAR_GAP_CELLS)}`
 }
 
-/** Instance row text: indent, title, and the model column. */
-function instanceHead(glyph: "├" | "└", title: string, model: string, width: number): string {
+/**
+ * Instance row text: indent, title, and the model column. An undefined model
+ * (A.10 says the label is omitted) fills the column with spaces, keeping the
+ * column width and the separator in place (C36).
+ */
+function instanceHead(
+  glyph: "├" | "└",
+  title: string,
+  model: string | undefined,
+  width: number,
+): string {
   const column = instanceColumn(width)
   const shownTitle = padCells(clip(cleanTitle(title), INSTANCE_TITLE_CELLS), INSTANCE_TITLE_CELLS)
-  const modelField = padCells(fitModel(model, Math.min(column, INSTANCE_MODEL_CELLS)), column)
+  const modelField =
+    model === undefined
+      ? " ".repeat(column)
+      : padCells(fitModel(model, Math.min(column, INSTANCE_MODEL_CELLS)), column)
   return ` ${glyph} ${shownTitle}${" ".repeat(INSTANCE_TITLE_GAP_CELLS)}${modelField}${" ".repeat(INSTANCE_BAR_GAP_CELLS)}`
 }
 
@@ -486,11 +517,26 @@ export type PanelRow = {
   agentColor?: string
 }
 
+/**
+ * C35: the single spelling of a resolved short label. Both the instance side
+ * and the role baseline run through this helper, so two absent refs compare
+ * equal (`UNKNOWN_MODEL`) and the constant is read in one place.
+ */
+function resolvedShort(
+  ref: ModelRef | undefined,
+  shortLabel: (ref: ModelRef) => string,
+): string {
+  return ref ? shortLabel(ref) : UNKNOWN_MODEL
+}
+
 type Section = {
   agentID: string
   name: string
   color?: string
-  model: string
+  /** The definition model: role-row text source and A.10 role baseline (C35). */
+  model?: ModelRef
+  /** Built-in roles show the tag instead of a model (A.9, C34). */
+  builtin: boolean
   instances: Array<{ session: SessionInfo; state: "active" | "grace" }>
 }
 
@@ -539,7 +585,6 @@ export function panel(
 ) {
   const W = effectiveWidth(width)
   const shortLabel = labeler(sources.models, sources.providers, true)
-  const roleLabel = (ref: ModelRef | undefined) => (ref ? shortLabel(ref) : "")
 
   const members = sources.members
   // A missing snapshot is not a fresh decision: no members, no rows (A.8).
@@ -603,7 +648,8 @@ export function panel(
           agentID: session.agent,
           name: agent.name ?? session.agent,
           color: agent.color,
-          model: roleLabel(agent.model),
+          model: agent.model,
+          builtin: BUILTIN_AGENT_IDS.includes(session.agent),
           instances: [],
         }
         sections.set(session.agent, entry)
@@ -636,7 +682,8 @@ export function panel(
       agentID: agent.id,
       name: agent.name ?? agent.id,
       color: agent.color,
-      model: roleLabel(agent.model),
+      model: agent.model,
+      builtin: BUILTIN_AGENT_IDS.includes(agent.id),
       instances: [],
     }))
   idle.sort(compareNames)
@@ -655,14 +702,17 @@ export function panel(
 
   const pushRole = (
     agentName: string,
-    model: string,
+    model: ModelRef | undefined,
     state: RowState,
     tps: number | undefined,
     color: string | undefined,
+    builtin: boolean,
   ) => {
     number += 1
+    // A built-in role never reads its definition model (A.9, C34).
+    const modelText = builtin ? "" : model ? shortLabel(model) : ""
     rows.push({
-      head: roleHead(number, agentName, model, W),
+      head: roleHead(number, agentName, modelText, W, builtin),
       filled: barFill(tps),
       tps,
       state,
@@ -672,6 +722,7 @@ export function panel(
   const pushInstance = (
     glyph: "├" | "└",
     instance: Section["instances"][number],
+    roleRef: ModelRef | undefined,
     color?: string,
   ) => {
     // A finished session has no live speed, so a grace row fills nothing (F18).
@@ -680,7 +731,7 @@ export function panel(
       head: instanceHead(
         glyph,
         instance.session.title ?? instance.session.id,
-        instanceLabel(instance.session, sources, shortLabel),
+        instanceLabel(instance.session, sources, roleRef, shortLabel),
         W,
       ),
       filled: barFill(tps),
@@ -706,9 +757,14 @@ export function panel(
     sectionsToEmit.push({
       lines: section.instances.length + 1,
       emit: () => {
-        pushRole(section.name, section.model, state, tps, active ? section.color : undefined)
+        pushRole(section.name, section.model, state, tps, active ? section.color : undefined, section.builtin)
         section.instances.forEach((one, index) => {
-          pushInstance(index === section.instances.length - 1 ? "└" : "├", one, section.color)
+          pushInstance(
+            index === section.instances.length - 1 ? "└" : "├",
+            one,
+            section.model,
+            section.color,
+          )
         })
       },
     })
@@ -716,7 +772,7 @@ export function panel(
   for (const role of idle) {
     sectionsToEmit.push({
       lines: 1,
-      emit: () => pushRole(role.name, role.model, "idle", undefined, role.color),
+      emit: () => pushRole(role.name, role.model, "idle", undefined, role.color, role.builtin),
     })
   }
 
@@ -742,14 +798,19 @@ export function panel(
   }
 }
 
-/** Instance model label: R8 resolution's short label, else `unknown model`. */
+/**
+ * A.10 (C35): the instance label to render, or `undefined` when the instance's
+ * resolved short label equals the role baseline's. Both sides go through
+ * `resolvedShort` and are compared before any clip, cap or padding.
+ */
 function instanceLabel(
   session: SessionInfo,
   sources: Sources,
+  roleRef: ModelRef | undefined,
   shortLabel: (ref: ModelRef) => string,
-): string {
-  const ref = modelRef(session, sources)
-  return ref ? shortLabel(ref) : UNKNOWN_MODEL
+): string | undefined {
+  const instance = resolvedShort(modelRef(session, sources), shortLabel)
+  return instance === resolvedShort(roleRef, shortLabel) ? undefined : instance
 }
 
 /** `42s`, `3m`, `1h 2m`. Empty when the start time is unknown. */

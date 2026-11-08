@@ -28,6 +28,16 @@ testable from plain data.
   visible host built-ins. A visible built-in with an in-scope instance under a
   charter member set is a **temporary role**; it is a role only while it has an
   instance (§2.1).
+- **Built-in role** — a role whose id is in `BUILTIN_AGENT_IDS` (C32), in
+  either mode. Its row shows no model label: the model slot holds the tag
+  `[built-in]` (`BUILTIN_TAG_TEXT`, C33, C34, A.9). Built-in-ness is carried by
+  the head text; it is not a row field.
+- **Role baseline model** — the role's own resolved model for the A.10
+  comparison: the section definition's `agent.model` (the snapshot member, or
+  the live entry for a temporary built-in), rendered by the same short-label
+  rule as an instance and mapped to `UNKNOWN_MODEL` when the definition has
+  none. It is a comparison operand only: it never prints on a built-in row
+  (A.9) and never takes the role field cap or the role column width (C35).
 - **Instance** — one child session that belongs to a role, including a
   temporary role, and is either running (**active**) or inside the failure
   grace window (**grace**).
@@ -50,6 +60,10 @@ testable from plain data.
   ```
 
   `head` is the whole row except the bar and is exactly `width - 5` cells.
+  A role head is number, name, and either the model label or, for a built-in
+  role, the tag (`BUILTIN_TAG_TEXT`); an instance head is indent, title, and
+  the model label when A.10 shows it (the model-column cells stay in place as
+  spaces when it is omitted, §1.2). No head carries both (A.9).
   `filled` is 0–5. `tps` is the speed the fill was derived from; a role row
   carries the busiest **active** instance's speed, an idle role row carries
   `undefined`, and a grace row carries `undefined` because a finished session
@@ -110,9 +124,19 @@ included).
   temporary role row only while it has at least one in-scope instance (active
   or grace, §R3); the row disappears with its last instance (§R3/R4, §2.1).
   A non-builtin id absent from the snapshot never gets a row, running or not.
+- **Built-in tag (A.9)** — a built-in role shows no model label. Its model
+  slot carries `BUILTIN_TAG_TEXT` (`[built-in]`, 10 cells, C33) beside the
+  role name, in both modes: temporary built-in rows under a charter member
+  set and permanent built-in rows in built-in mode (C34). The tag replaces the
+  role row's model field only: it holds even when the host resolves a
+  definition model for that agent (R8 step 2 still serves instance
+  resolution). A member row of a non-builtin agent keeps the existing model
+  rule unchanged. An instance row of a built-in keeps its model label (shown
+  per A.10) and never carries the tag (§5, A.9).
 - Row: two-digit number (` 1.`, `20.`), agent name (max 9 cells, clipped with
   `…`), the agent definition's model as the short `Provider/Model` label, an
-  agent with no defined model shows blank model cells.
+  agent with no defined model shows blank model cells. A built-in role row
+  shows the tag in that slot instead (A.9).
 - Idle state: grey (`theme.text.muted`), empty boxes. Only member rows can be
   idle; a temporary role is never idle.
 - Working state: the colour defined on the agent definition, falling back to
@@ -121,11 +145,15 @@ included).
 Role display name is `agent.name ?? agent.id`, clipped to 9 cells and padded
 to 9. A role row's model column is blank (spaces) when
 `agent.model` is undefined; otherwise the label is the short label (R8) of
-`agent.model`, clipped by the R5 split rule. `view.total` counts the member
+`agent.model`, clipped by the R5 split rule. For a built-in role the column
+holds the tag instead and `agent.model` is never read for that row (C34);
+the name clip is confined to `ROLE_NAME_CELLS` and cannot consume the tag
+slot (C5, A.9). `view.total` counts the member
 rows only, including rows folded by overflow; temporary rows never enter it.
 Member `AgentInfo` values come from the snapshot, so a mid-session definition
 change cannot move a member row; temporary rows read the live builtin
-definition (name, model, colour) and use the same clipping and fallbacks.
+definition (name and colour; its model never reaches the role row, A.9) and
+use the same clipping and fallbacks.
 
 ## R3 — Instance rows
 
@@ -135,8 +163,16 @@ currently viewed (other tabs' sessions are invisible here).
 - Indented under the role with tree glyphs `├` (more follow) and `└` (last).
   Unnumbered.
 - Fields in order: session title (max 8 cells, clipped with `…`), model
-  short label (max 12 cells via R5's split rule), speed bar (5 boxes, R6).
-- Colour: same rule as the working role row.
+  short label (max 12 cells via R5's split rule, shown only when A.10 keeps
+  it), speed bar (5 boxes, R6).
+- Model cell (A.10): the model short label renders only when the instance's
+  resolved label differs from the role's resolved baseline label, or when the
+  instance's model is unknown and the role's is known. Both sides are resolved
+  by R8's order and compared as short-label text **before** any clipping or
+  padding (C35). When the labels agree the cell is omitted; the row keeps the
+  same geometry and the model-column cells become spaces (C36, §1.2).
+- Colour: same rule as the working role row. Omitting the cell changes no
+  colour: the blank cells carry no text, and the bar keeps `barTone(filled)`.
 - A succeeded instance disappears immediately: its row collapses back into
   the role row. A failed or interrupted instance does not: it follows R4's
   grace window before its row collapses. For a temporary builtin row (R2,
@@ -161,7 +197,26 @@ Rules:
   single spaces, trimmed), clipped to 8 cells, padded to 8.
 - Instance model = R8 resolution for that session, rendered as the short
   label, clipped to 12 cells by the R5 split rule, then padded to the model
-  column; one separator cell follows the column before the boxes.
+  column; one separator cell follows the column before the boxes. A.10
+  suppresses the label when it equals the role baseline label (C35); the
+  padding and the separator are unchanged when it is suppressed (C36).
+- Comparison operands (A.10). Instance side: R8's own-session model → agent
+  definition model (live `agents` list, §5) → nearest ancestor model →
+  `UNKNOWN_MODEL`. Role side: the section definition's `agent.model` — the
+  snapshot member entry, or the live builtin entry for a temporary row —
+  rendered by the same short-label rule, or `UNKNOWN_MODEL` when it has no
+  model. For a temporary built-in role the role side is its live definition
+  model; the tag on its role row (A.9) is never the comparison operand. Both
+  sides map through one helper, so `unknown model` equals `unknown model` and
+  the cell is omitted (C35; Product wording is recorded as F29).
+- Recompute: the comparison is evaluated on every `panel()` pass and its
+  result is never stored. A resolved instance label can change mid-session
+  (session model selected, ancestor appears, live definition changes), so a
+  row can gain or lose the model cell between passes with no grace, state, or
+  timer side effect.
+- The instance model text cap stays 12 cells whether the label is shown or
+  not; suppression removes text, never width, and the title keeps its 8-cell
+  field (§1.2, C11, C36).
 - "Finished" means status is no longer `running`. A succeeded session has no
   row at any age. Failed and interrupted sessions are the R4 exception and
   keep a row only inside the window.
@@ -220,8 +275,14 @@ separator cell, so `head` is `W − 5` cells and ends with that space.
   whole label clips to `field - 1` characters plus `…`.
 - Role field: number 3 + name 9 + space 1 + model (width - 19, capped at 20)
   + separator 1 + boxes 5. At the default width the model field is 16 cells.
+  A built-in role row puts `BUILTIN_TAG_TEXT` in that same model slot, clipped
+  to the column (C33, C34): the arithmetic above is unchanged, so no total
+  width, instance column, or member column moves (A.9).
 - Instance field: indent 3 (space, glyph, space) + title 8 + space 1 + model
-  12 + padding to align + separator 1 + boxes 5.
+  12 + padding to align + separator 1 + boxes 5. A.10's omitted model cell
+  keeps this arithmetic: the label text becomes 0 cells (all padding), the
+  title field stays 8 and the column stays `width - 18`, so the separator and
+  the boxes do not move (§1.2, C36).
 - Exactly one separator cell sits between the model field and the boxes on
   both row shapes (`ROLE_BAR_GAP_CELLS`, `INSTANCE_BAR_GAP_CELLS`, A.5).
   Between the box glyphs there is no gap (R6). The separator is why the role
@@ -231,10 +292,12 @@ separator cell, so `head` is `W − 5` cells and ends with that space.
 
 The cell-by-cell arithmetic is §1. The cap in "capped at 20" is applied to
 the model **label text**; the model **column** stays `width - 19` so the row
-is exactly `width` cells for widths above 39 as well (F1). The instance model
-**text** is 12 cells at every width where the column allows it; above 35 the
-extra column cells become padding (F21). Below 30 cells the instance model
-text shrinks below 12 to keep the row exactly `width` (F1).
+is exactly `width` cells for widths above 39 as well (F1). When A.10 shows it,
+the instance model **text** is 12 cells at every width where the column allows
+it; above 35 the extra column cells become padding (F21). Below 30 cells the
+instance model text shrinks below 12 to keep the row exactly `width` (F1). A
+suppressed instance label occupies 0 text cells and the whole column is
+padding (C36).
 
 ## R6 — Speed bar
 
@@ -382,7 +445,8 @@ Labels:
   session that resolves to no ref labels `unknown model`.
 - Role rows do not use session resolution: they show `agent.model` or blanks
   (R2). Instance rows use `resolve()`. `unknown model` as an instance label
-  is clipped by R5, not blanked.
+  is clipped by R5, not blanked; A.10 omits it only when the role baseline is
+  also unknown (C35, F29).
 
 ## R9 — Subagent picker
 
@@ -426,7 +490,8 @@ Design decisions:
 
 - `Show running subagent models` — opens the picker.
 - `Toggle compact subagent status` — toggles compact between sessions,
-  persisted, toast feedback, hidden when the config forces `compact`.
+  persisted, toast feedback, disabled (still registered and shown in the
+  palette) when the config forces `compact`.
 
 Design decisions:
 
@@ -434,9 +499,17 @@ Design decisions:
   `{ compact: boolean }`, initial `{ compact: false }`.
 - Effective compact = configured `compact` when it is a boolean, else the
   stored flag.
-- The toggle command is registered only when the configured `compact` is not
-  a boolean (config forces the mode, including `compact: false`, which pins
-  full mode; F10). It flips the stored flag and shows
+- The toggle command is always registered and is gated by its `enabled`
+  predicate, `enabled = (configured compact is not a boolean)`
+  (`src/tui.tsx:513-518`). So a config that forces the mode — including
+  `compact: false`, which pins full mode — leaves the palette entry
+  visible-but-disabled, not unregistered. This is exactly R10 as settled
+  (Product: "disabled (but still shown in the palette)"); no open point
+  remains. Why registration time: the command
+  list is built once in `context.keymap.layer` at setup, while `enabled` is
+  read per palette render, so gating at registration would freeze the state at
+  activation; the disabled entry also explains the config pin instead of
+  silently vanishing. When enabled it flips the stored flag and shows
   `Subagent status: compact` or `Subagent status: full`.
 - The show command carries the optional `bind` keybind; both commands are
   palette entries in the `Subagents` group.
@@ -495,7 +568,7 @@ literals alone moved. A.5 restores the one-cell separator before the bar, so
 | 1–3 | 3 | number: two digits + `.` (` 1.`, `10.`) | `ROLE_NUMBER_CELLS` |
 | 4–12 | 9 | agent name, clipped with `…`, padded | `ROLE_NAME_CELLS` |
 | 13 | 1 | space between name and model | `ROLE_NAME_GAP_CELLS` |
-| 14–(W−6) | W−19 | model column: label clipped to `min(W−19, 20)` cells, padded to the column | `ROLE_FIXED_CELLS`, `ROLE_MODEL_MAX_CELLS` |
+| 14–(W−6) | W−19 | model column: label clipped to `min(W−19, 20)` cells, padded to the column; a built-in role row puts `BUILTIN_TAG_TEXT` here instead (C33, C34) | `ROLE_FIXED_CELLS`, `ROLE_MODEL_MAX_CELLS`, `BUILTIN_TAG_TEXT` |
 | W−5 | 1 | separator before the boxes | `ROLE_BAR_GAP_CELLS` |
 | W−4–W | 5 | speed boxes (tight between glyphs) | `BAR_CELLS` |
 
@@ -509,6 +582,40 @@ the boxes.
 A role with no `agent.model`: the model column is 16 spaces plus the 1-cell
 separator.
 
+Built-in role row (A.9). The proposed placement is accepted as-is: the tag
+takes the existing model-field position, so no total width, instance column,
+or member column changes. The slot holds the tag, never a model:
+
+```
+slot(built-in) = padCells(clip(BUILTIN_TAG_TEXT, W−19), W−19)
+slot(member)   = agent.model ? padCells(fitModel(label, min(W−19, 20)), W−19)
+                            : " ".repeat(W−19)
+head           = number + paddedName + space + slot + separator
+```
+
+`BUILTIN_TAG_TEXT` is 10 cells, so the tag is whole whenever `W−19 >= 10`
+(`W >= 29`); below that the ordinary `clip` rule applies (`min` with
+`ROLE_MODEL_MAX_CELLS` is not applied: the tag's own 10 cells are its cap and
+`clip` cannot exceed them). Precedence: the name clip is confined to columns
+4–12 (`ROLE_NAME_CELLS`, C5), so a 9+ cell name cannot eat the tag; the tag
+always starts in column 14 behind `ROLE_NAME_GAP_CELLS`. At `W = 35` the
+built-in head is ` 1.explore   [built-in]       ` (30 cells: tag 10 + 6 pad +
+1 separator, so 7 spaces after `]`). At `W = 29` it is
+` 1.explore   [built-in] ` (24 cells, no pad). At `W = 28` the 9-cell column
+clips the tag to `[built-i…`, head ` 1.explore   [built-i… ` (23 cells). At
+`W = 19` the column is 0 cells, so the slot is `""` and the tag disappears
+while the separator stays.
+
+Composition and fixture location (A.9): `roleHead` in `src/lib/collect.ts`
+gains one `builtin` flag (from `agent.id ∈ BUILTIN_AGENT_IDS`) and takes the
+slot branch above; `PanelRow` keeps its shape and the TUI renders `row.head`
+verbatim, never composing a role head (`src/tui.tsx:344`). The exact
+tag-row strings are therefore pinned in `src/lib/collect.test.ts` through
+`panel()`, inside the pure layer. This answers the earlier flag about
+title-string fixtures living outside the pure layer: the **role-row** head
+strings are not one of them, and no TUI-side built-in head composition is
+introduced.
+
 ### 1.2 Instance row
 
 | Columns | Cells | Field | Constant |
@@ -516,7 +623,7 @@ separator.
 | 1–3 | 3 | indent: space, glyph (`├` or `└`), space | `INSTANCE_INDENT_CELLS` |
 | 4–11 | 8 | session title, clipped with `…`, padded | `INSTANCE_TITLE_CELLS` |
 | 12 | 1 | space between title and model | `INSTANCE_TITLE_GAP_CELLS` |
-| 13–(W−6) | W−18 | model column: label clipped to `min(W−18, 12)`, padded to the column | `INSTANCE_FIXED_CELLS`, `INSTANCE_MODEL_CELLS` |
+| 13–(W−6) | W−18 | model column: label clipped to `min(W−18, 12)`, padded to the column; all spaces when A.10 omits the label (C35, C36) | `INSTANCE_FIXED_CELLS`, `INSTANCE_MODEL_CELLS` |
 | W−5 | 1 | separator before the boxes | `INSTANCE_BAR_GAP_CELLS` |
 | W−4–W | 5 | speed boxes (tight between glyphs) | `BAR_CELLS` |
 
@@ -529,6 +636,50 @@ only when the column itself is narrower than 12 (`W < 30`).
 
 Both shapes put the separator in column `W − 5`, so the last model cell and the
 bar align across role and instance rows.
+
+A.10 omission (C35, C36). The decision is the **filler slot**, not a reflow:
+the model column keeps its `W − 18` cells and holds spaces when the label is
+suppressed. Reflow is rejected because it would have to widen the title field
+past `INSTANCE_TITLE_CELLS` (C11 is binding) or move the model field's start
+column, which would make the bar column depend on the title text. The
+arithmetic:
+
+```
+shown(instance, role) = resolvedShort(instanceRef) !== resolvedShort(roleRef)
+modelField = shown ? padCells(fitModel(label, min(W−18, INSTANCE_MODEL_CELLS)), W−18)
+                   : " ".repeat(W−18)
+head       = " " + glyph + " " + padCells(clip(cleanTitle(title), INSTANCE_TITLE_CELLS), INSTANCE_TITLE_CELLS)
+             + " ".repeat(INSTANCE_TITLE_GAP_CELLS) + modelField
+             + " ".repeat(INSTANCE_BAR_GAP_CELLS)
+```
+
+`resolvedShort(ref)` is the single spelling of a resolved label:
+`ref ? shortLabel(ref) : UNKNOWN_MODEL`. `instanceRef` is R8's `modelRef` for
+the session; `roleRef` is the section's `agent.model` (§R3 comparison
+operands). The comparison runs on these unclipped strings, so two labels that
+would clip to the same 12-cell text still differ (C35).
+
+Both branches produce a `W − 5`-cell head: the column width never changes,
+only its content, so the separator stays in column `W − 5` and the boxes stay
+in columns `W − 4 … W` on every row. That is what preserves R5's
+last-5-columns invariant across rows where one instance shows a label and the
+one above it does not (T12).
+
+At `W = 35` (column 17): omitted → 17 spaces, so a title `Inspect modules`
+(`Inspect…`) gives head `" └ Inspect…                   "` (30 cells: 19 spaces
+after the title). Shown with R8 label `Go/Grok 4.7` → 6 pad + 1 separator
+after an 11-cell label, head `" └ Inspect… Go/Grok 4.7       "` (30 cells).
+At `W = 29` (column 11) the omitted slot is 11 spaces; at `W = 19` (column 1)
+it is one space, so the head is `" └ Inspect…   "` (14 cells) and the row is
+still exactly 19 cells with its 5 boxes (C36's width-pressure fixture).
+
+Composition (A.10) stays in the pure layer, the A.9 way: `instanceLabel` in
+`src/lib/collect.ts` takes the section's role baseline and returns
+`string | undefined` (`undefined` when the two resolved labels are equal);
+`instanceHead` takes `string | undefined` and writes the filler slot for
+`undefined`; the TUI keeps rendering `row.head` verbatim (`src/tui.tsx:344`)
+and composes nothing. T6–T14 are therefore pinned through `panel()` in
+`src/lib/collect.test.ts`.
 
 ### 1.3 Model label split rule
 
@@ -549,7 +700,12 @@ Input: a full or short label `P/M…` and a budget `B` cells.
 Padding to a column is always spaces.
 
 The role label budget is `min(W−19, 20)`; the instance label budget is
-`min(W−18, 12)`. The picker label uses a plain `clip(label,
+`min(W−18, 12)`. The built-in tag bypasses `fitModel` entirely: it is
+`clip(BUILTIN_TAG_TEXT, W−19)` and no split rule applies (C33, A.9). A.10's
+comparison happens **before** this section: it compares the unclipped short
+labels (C35), and an omitted instance label never enters `fitModel` or `clip`
+(C36) — the slot is plain spaces, not a clipped empty string. The
+picker label uses a plain `clip(label,
 PICKER_MODEL_CELLS)` — the split rule is not applied there (R9) — and the
 picker agent uses `clip(agent, PICKER_AGENT_CELLS)` with the same `clip` rule
 (§1.3, C24, C28, F16).
@@ -564,8 +720,8 @@ recompute.
 
 | Source | Provides | Feeds |
 | --- | --- | --- |
-| `context.data.location.agent.list(location)` | id, name, model, mode, hidden, color | member-set snapshot (mode, member roles, `M`); definitions for temporary builtin rows; agent models/colours/names; R8 step 2 |
-| member-set snapshot (TUI, A.8) | `MemberSet` from `memberSet(agent.list)` on the first render per location | `view.mode`, member idle rows, `total` (`M`), temporary-row classification (§2.1) |
+| `context.data.location.agent.list(location)` | id, name, model, mode, hidden, color | member-set snapshot (mode, member roles, `M`); definitions for temporary builtin rows; agent models/colours/names; R8 step 2; live definition model as the A.10 role baseline for a temporary row |
+| member-set snapshot (TUI, A.8) | `MemberSet` from `memberSet(agent.list)` on the first render per location | `view.mode`, member idle rows, `total` (`M`), temporary-row classification (§2.1), A.10 role baseline for member rows |
 | `context.data.session.list()` | child sessions: id, parentID, agent, model, title, outcome, time | instance set, attribution to a role, title, grace eligibility |
 | `context.data.session.get(id)` | one session by id | ancestor walk for R8; session open |
 | `context.data.session.root(id)` | root session id | tab scope (R3) |
@@ -577,15 +733,28 @@ recompute.
 | `context.theme` | `text.base`, `text.muted`, `text.feedback.success/warning.base` | title, idle/active/grace text, filled boxes (success), empty boxes (muted) |
 | `context.storage.store("subagent-live-status-plugin")` | persisted `{ compact }` | R10 |
 | slot input `sessionID` | viewed session id | R3 tab scope; compact count scope |
-| `context.ui.router.current()` | current route | session context for opening a picked session; not used to scope the picker (F9) |
 | host events (`session.created/deleted/moved/forked/renamed/status/idle/agent.selected/model.selected/execution.started/succeeded/failed/interrupted`, plus `session.step.ended` and `session.message.content.updated`) | invalidation; on `session.created` and `session.execution.started` also a sync trigger, on `session.step.ended` a message re-sync trigger (known-fire: final `tokens` per completed assistant step), on `session.message.content.updated` a second re-sync trigger (delivery unverified; G16) | bump the view signal; load the instance session then its messages; re-read messages when an assistant step ends |
 | 1 s ticker | clock while a grace row exists; doubles as a recompute trigger for `tps` (R6) | recompute `now` for grace expiry and re-run `panel()` |
+
+Opening a picked session is an action, not a source: the TUI calls
+`context.ui.tabs.focus` for a root session and falls back to
+`context.ui.router.navigate({ type: "session", sessionID })`
+(`src/tui.tsx:373-378`). It never reads `context.ui.router.current()`, so that
+value is not a data source for any field.
 
 Location: the location the TUI is showing (`context.location`, else
 `context.data.location.default()`). The plugin never merges agent definitions
 from disk; the host's agent list is authoritative. The member snapshot is kept
 per location: switching back to a location reuses its frozen snapshot, and a
 location seen for the first time takes its own (§2.1, A.8).
+
+A.10's comparison reads no new source and needs no new sync. Both operands are
+already in memory during one `panel()` pass: the role baseline comes from the
+section, built from `sources.members` or the live `agents` entry; the instance
+ref comes from `modelRef(session, sources)`, whose three steps read
+`session.model`, the live `agents` list, and `sessions.get` — all sources the
+pass already consults (R8, §5). The comparison is recomputed every pass; no
+"shown/omitted" bit is cached in the TUI or in the view.
 
 ### 2.1 Member selection (A.8)
 
@@ -626,7 +795,12 @@ Role sets:
 
 - **Member rows** are `members.roles` in both modes. Their `AgentInfo` values
   are the snapshot's, so a mid-session definition change cannot remove or move
-  a member row; `total` is their count. Attribution resolves a member id to the
+  a member row; `total` is their count, and the member's snapshot `model` is
+  the A.10 role baseline. Instance R8 step 2 reads the live list (§5), so a
+  definition model changed after the snapshot can make an instance label
+  differ from the role baseline; the row then shows the label. Nothing is
+  cached: the next pass compares the then-current values.
+  Attribution resolves a member id to the
   snapshot entry first; only an id with no member entry may use the live list,
   and only when it is a charter-mode visible builtin (the temporary row).
 - **Temporary rows** exist in charter mode only. A session whose `agent` id is
@@ -634,9 +808,13 @@ Role sets:
   `members.roles` creates a synthetic section when it has at least one
   in-scope instance (active or grace, §R3 scope). The section definition is
   the live `agent.list` entry (builtins always exist), so name clipping,
-  colour fallback, the role model column, instance attribution and the R5
-  arithmetic are the existing role-row code: no new constant, no new field
-  shape. The instance rows use R8 as usual.
+  colour fallback, the built-in tag slot (C34: a temporary row is a built-in
+  role, so its row shows the tag and never prints the live definition model),
+  instance attribution and the R5 arithmetic are the existing role-row code:
+  no new field shape, and only the one new text constant. That live definition
+  model is still the A.10 **role baseline** for its instance rows: it is read
+  as a comparison operand, never printed on the role row (A.9 unchanged,
+  C35). The instance rows use R8 as usual.
 - **Ignored ids**: a non-builtin id absent from `members.roles` never gets a
   row, even while a session of it runs (its definition appeared after the
   snapshot, or the snapshot is built-in mode). Hidden, primary and unknown ids
@@ -661,7 +839,7 @@ percentage. `model.list` is read for labels only.
 
 Data availability: `message.list(id)` reads the data layer's cache, which the
 client fills only for sessions it has synchronised. The code now syncs before
-it reads (`syncSession`, `src/tui.tsx:92-108`) on the touchpoints it already
+it reads (`syncSession`, `src/tui.tsx:190-209`) on the touchpoints it already
 collects:
 
 - `session.execution.started` or `session.created` for a child session whose
@@ -714,6 +892,16 @@ the messages cannot yield a speed (§R6).
   and any session in another tab produce no row. A temporary builtin role is
   active or grace only; it has no idle row.
 - Title is `theme.text.base`; the overflow line is `theme.text.muted`.
+- The built-in tag is part of the row text, so it takes the row colour above
+  and nothing else: muted on an idle built-in row, the agent colour (else
+  success green) on a working one, warning during grace. No new tone, and the
+  bar logic is untouched — the boxes still follow `barTone(row.filled)`
+  (A.9, R6).
+- A.10 changes no colour. An omitted model cell is spaces, so there is no text
+  to colour; the title, tree glyph, and any shown model label keep the row
+  colour rule before and after omission. The bar keeps `barTone(row.filled)`,
+  and the empty remainder stays muted (§R6). A row that gains or loses its
+  label mid-session changes only the label text, never the tone or state.
 - The panel is hidden at `total = 0`; compact is shown at `total > 0` and is
   the only line then.
 
@@ -744,12 +932,28 @@ the messages cannot yield a speed (§R6).
 
 Already specified in R8. The single shared implementation must be used by the
 instance rows, the picker, and the speed computation's message scope: each
-instance's speed reads only that session's own messages. The role row uses
-the definition model of its member (snapshot) or temporary builtin (live), R2.
+instance's speed reads only that session's own messages. A role row uses the
+definition model of its member (snapshot) or temporary builtin (live) **only
+when the agent is not a built-in**; a built-in role row shows the tag and
+prints no model at all (R2, A.9, C34). R8 itself is unchanged and stays the
+source for every instance row, including an instance of a built-in: that row
+keeps its model label (subject to A.10, C35) and never carries the tag. A.9
+removes no resolution step; it changes only which text the **role** row
+prints.
 `sources.agents` keeps the full live list, including builtins that are not
 member rows, so R8 step 2 still resolves a temporary builtin's instance to its
 definition model. Cycle protection is mandatory: a parent chain that revisits a
 session stops the walk and falls through to item 4.
+
+A.10 (C35) adds one derived value, not a new resolution: the **role baseline
+label**, `resolvedShort(roleRef)` from the section definition's `agent.model`
+(snapshot member or live temporary entry), or `UNKNOWN_MODEL` when the
+definition has none. It is computed with the same short-label function as the
+instance side, so both sides are directly comparable strings. It is compared
+against `resolvedShort(modelRef(session, sources))` **before** the field's
+clip/cap; the role field's `min(W−19, 20)` cap and the built-in tag do not
+enter the comparison. R8's order is untouched: the instance side still runs
+own model → live agent definition → ancestor → `UNKNOWN_MODEL`.
 
 ## 6. Contract numbers
 
@@ -792,6 +996,10 @@ asserts only width or "contains" does not satisfy R12.
 | C30 | `BAR_GLYPH_FILLED` | `"▓"` (U+2593, 1 cell) | filled box glyph | `filled = 5` → `"▓▓▓▓▓"` (5 cells); a partially filled bar keeps the filled run leftmost | `filled = 0` → `""` (no filled glyph); the glyph is not U+25AE `▮` | R6 |
 | C31 | `BAR_GLYPH_EMPTY` | `"░"` (U+2591, 1 cell) | empty box glyph | `filled = 0` → `"░░░░░"` (5 cells); `filled = 4` → `"▓▓▓▓░"` (5 cells) | `filled = 5` → `""` (no empty glyph); the glyph is not U+25AF `▯` | R6 |
 | C32 | `BUILTIN_AGENT_IDS` | `["build", "compaction", "explore", "general", "summary", "title"]` (host v2.2.6 registry) | host builtin classification only (A.8) | agent list `[general, explore, coder]` → charter mode, member roles `[coder]`, `M = 1`; `[general, coder]` → charter mode even when `coder` is hidden or primary (mode looks at the unfiltered custom list) | list `[build, general, explore, title]` → no custom id, built-in mode, member roles `[explore, general]` (build primary, title hidden+primary), `M = 2`; list `[general, title]` → built-in mode, member roles `[general]`, `M = 1`; the id `title` must not be mistaken for a custom definition | R1, R2 |
+| C33 | `BUILTIN_TAG_TEXT` | `"[built-in]"` (10 cells) | the built-in role's model slot text (A.9), never a model label | width 29 → model column 10 → tag whole: head `" 1.explore   [built-in] "` (24 cells); width 35 → tag plus 6 pad cells in the 16-cell column, head `" 1.explore   [built-in]       "` (30 cells) | width 28 → model column 9 → `clip("[built-in]", 9)` = `"[built-i…"` (9 cells), head `" 1.explore   [built-i… "` (23 cells); width 20 → column 1 → `"…"`, head `" 1.explore   … "` (15 cells); width 19 → column 0 → `""`, head `" 1.explore    "` (14 cells) | R2 |
+| C34 | built-in tag slot rule | `built-in ? padCells(clip(BUILTIN_TAG_TEXT, W−19), W−19) : (model ? padCells(fitModel(label, min(W−19, 20)), W−19) : " ".repeat(W−19))`; built-in = `agent.id ∈ BUILTIN_AGENT_IDS` | which text fills the role model column (the column width itself is `ROLE_FIXED_CELLS`'s complement, unchanged) | built-in `explore` at width 35 → `" 1.explore   [built-in]       "` + `"▓▓▓░░"` (35 cells); the same row with the host resolving `agent.model = "Go/Kimi K3.1 Pro"` renders the same tag string, not the label (A.9 decision 2) | member `coder` at width 35 with model `"Go/Kimi K3.1 Pro"` → `" 1.coder     Go/Kimi K3.1 Pro "` (30 cells), the A.5/C6 member string unchanged; a built-in **instance** row → `" └ Inspect… Go/Grok 4.7       "` (30 cells), model label when A.10 shows it (C35), no tag | R2, R5 |
+| C35 | instance model visibility rule (A.10) | `shown = resolvedShort(instanceRef) !== resolvedShort(roleRef)`, with `resolvedShort(ref) = ref ? shortLabel(ref) : UNKNOWN_MODEL`; compared before any clip, cap or padding | whether the instance model column holds a label or is omitted | equal (member role): role `Go/Kimi K3.1 Pro`, instance resolves `Go/Kimi K3.1 Pro` → omitted, head `" └ Inspect…                   "` (30 cells: 3 + 8 + 1 + 17 + 1); the boxes still start in column 31 | differ: role `Go/Kimi K3.1 Pro`, instance `Go/Kimi K3.1 Pro Max` → shown as `" └ Inspect… Go/Kimi K3.…      "` (30 cells: 12-cell split text + 5 pad + 1 separator); a comparison made **after** clipping sees both as `Go/Kimi K3.…` and omits, so it fails the pin. Both unknown (role definition has no model, instance resolves none) → equal → omitted (F29). A temporary built-in role whose tag is shown but whose live definition model equals the instance's → omitted (T8); a role label longer than the 20-cell text cap still compares by its unclipped label and is omitted (T13); refs differing only by variant compare equal and are omitted (T14) | R3 |
+| C36 | omitted-slot rule (A.10) | `shown ? padCells(fitModel(label, min(W−18, 12)), W−18) : " ".repeat(W−18)`; the column stays `INSTANCE_FIXED_CELLS`'s complement and the separator stays | content of the instance model column | omitted at W = 35 → 17 spaces, head 30 cells, separator the 30th cell, boxes 31–35; at W = 30 (column 12) → 12 spaces; at W = 29 (column 11) → 11 spaces; at W = 19 (column 1) → 1 space, head `" └ Inspect…   "` (14 cells), row 19 cells | shown at W = 19 → `fitModel(label, 1)` falls to `clip(label, 1)` = `"…"`, head `" └ Inspect… … "` (14 cells, content differs from the 1-space slot); an implementation that drops the column or the separator when omitted yields a 13-cell head and shifts the boxes, and a reflow that widens the title breaks C11 | R3, R5 |
 
 C32 is a set-membership boundary, not a width. The fits side is "the list has
 at least one id outside the set"; the does-not-fit side is "every id is in the
@@ -800,6 +1008,27 @@ ones: a missing id (for example `title`) would make every session look like a
 charter session. The value is the host registry the plugin ships against; a
 host version that adds a builtin id updates this constant and its fixtures in
 the same commit (F26).
+
+C35's comparison is text equality, not ref equality: both sides run through
+the one `resolvedShort` helper, so two different refs that produce the same
+short label (including two refs that differ only by `variant`, which the short
+label drops, R8) compare equal and the cell is omitted (F30). "Before any
+clipping" means before `fitModel`, before `min(W−18, 12)`, before padding and
+before the role field's `min(W−19, 20)` cap: the operands are the unclipped
+`shortLabel` strings. The C35 does-not-fit fixture discriminates this: role
+`Go/Kimi K3.1 Pro` and instance `Go/Kimi K3.1 Pro Max` both clip to
+`Go/Kimi K3.…`, so a post-clip comparison would wrongly omit the label.
+
+Unknown vs unknown (C35, F29). `resolvedShort(undefined)` is
+`UNKNOWN_MODEL` on both sides, so a role with no definition model and an
+instance that resolves no model compare **equal** and the model cell is
+omitted. The information content is nil: the role row is already blank in that
+column, and two `unknown model` strings would add no distinguishing fact.
+Product's two clauses collide here ("or when the instance's model is unknown"
+against "When the labels agree, the model cell is omitted"); the design takes
+the omit branch and records it as F29, settled by PM arbitration. The asymmetric case is
+not ambiguous: an unknown instance label against a **known** role label
+differs, so the cell renders `unknown mod…` (T9's twin, T10's inverse).
 
 C19's `5.59` and `14.04` are the two real speeds observed in the live R6
 diagnostic (D1); which session they came from does not matter. They are sanity
@@ -838,6 +1067,19 @@ One constant, one meaning, checked at the places the numbers collide:
 - `BUILTIN_AGENT_IDS` (C32) owns the host builtin classification only. It is
   not a row count, not a width, and never feeds `M` directly; `M` is
   `members.roles.length` after `isVisibleRole` (A.8).
+- `BUILTIN_TAG_TEXT` (C33) is the tag's only source of both text and width
+  (10 cells by `cellWidth`); it is not a model label, never passes through
+  `fitModel`, and is not capped by `ROLE_MODEL_MAX_CELLS` (a second field's
+  constant). The slot it fills is `ROLE_FIXED_CELLS`'s existing complement, so
+  no width constant is added for it (C34, A.9).
+- `UNKNOWN_MODEL` (C27) stays the single spelling of "no model known". The
+  A.10 comparison maps both operands through one `resolvedShort` helper, so
+  the constant is read in one place for one field (the resolved-label text);
+  no second unknown-model constant is introduced, and the role baseline never
+  reuses `BUILTIN_TAG_TEXT` or the role column width (C35). `INSTANCE_MODEL_CELLS`
+  (12) still caps the label **text** when it is shown; the omitted slot is
+  padding in the same `INSTANCE_FIXED_CELLS` complement, so no new width
+  constant exists for it (C36).
 
 Fixtures for C1 that pin the section-stop rule (R7, §4, F5). Width 35;
 sections built from roles and instances as stated.- Stop rule (discriminating): role `A` with 7 instances (8 body lines), then
@@ -999,11 +1241,17 @@ are in the viewed tab.
   idle row.
 - **S4 — temporary builtin and member both work.** Same `S` as S3, plus a
   running in-scope `general` child at 1000 (title `Audit`) and a running
-  in-scope `coder` child at 2000 (title `Check`). `mode = "charter"`, `M = 1`;
-  both roles have a working instance, so `N = 2` → title
+  in-scope `coder` child at 2000 (title `Check`). The `general` temporary
+  role's baseline is its live definition model and the `coder` role's baseline
+  is its snapshot model; neither child has an own or ancestor model, so R8
+  step 2 resolves each child to the same definition model its role baseline
+  uses (no mid-session definition change), both label pairs agree, and A.10
+  omits both model cells (C35/F29). `mode = "charter"`,
+  `M = 1`; both roles have a working instance, so `N = 2` → title
   `Project Team Members 2/1`. Busy order by oldest instance: `general` at 1000
   before `coder` at 2000. Rows: ` 1.general` (active, definition colour),
-  ` └ Audit   ` (R8 model), ` 2.coder` (active), ` └ Check   ` (R8 model).
+  `" └ Audit                      "` (30 cells: no model cell, C35/F29),
+  ` 2.coder` (active), `" └ Check                      "` (30 cells, same).
   `total` did not move.
 - **S5 — succeeded temporary removes both.** S3 plus one running in-scope
   `general` child at 1000; then it is no longer running and is not grace
@@ -1043,11 +1291,143 @@ are in the viewed tab.
   no row, `general` has a temporary row. Next plugin activation with
   `[general, designer]` → still charter, roles `[designer]`, `M = 1`.
 
+### A.9 built-in tag scenarios (exact values)
+
+Width 35 unless stated; the built-in rows use `BUILTIN_TAG_TEXT` (C33) in the
+16-cell model column, so their heads carry the tag plus 6 pad cells plus the
+separator (7 spaces after `]`).
+
+- **T1 — permanent built-in rows in built-in mode.** `A = [build(primary),
+  general(subagent), explore(subagent), title(hidden, primary)]` → built-in
+  mode, roles `[explore, general]`, `M = 2`. Idle rows:
+  `" 1.explore   [built-in]       "` + `"░░░░░"` and
+  `" 2.general   [built-in]       "` + `"░░░░░"`.
+- **T2 — temporary built-in row in charter mode; its instance keeps the
+  model.** Snapshot `[coder]` with a running in-scope `general` child at 1000
+  (title `Audit`, model `Go/Grok 4.7`) and idle member `coder` with model
+  `Go/Kimi K3.1 Pro`. Rows: `" 1.general   [built-in]       "` + `"░░░░░"`
+  (or `"▓▓▓░░"` for a working speed above 50), then
+  `" └ Audit    Go/Grok 4.7       "` + its own bar, then
+  `" 2.coder     Go/Kimi K3.1 Pro "` + `"░░░░░"`. The built-in role row shows
+  the tag; its instance row shows the model and no tag.
+- **T3 — a live definition model is ignored on a built-in role row (A.9
+  decision 2).** The T1 `explore` entry carries `model = "Go/Kimi K3.1 Pro"`:
+  the row is still `" 1.explore   [built-in]       "`, while the same 16-cell
+  label on the member `coder` renders `" 2.coder     Go/Kimi K3.1 Pro "`.
+- **T4 — the name clip never eats the tag (A.9 decision 4).** Built-in name
+  `"1234567890"` (10 cells) → `clip` gives `"12345678…"` (9 cells, C5) and the
+  head is `" 1.12345678… [built-in]       "` (30 cells): one `ROLE_NAME_GAP_CELLS`
+  space, the whole tag, 6 pad, 1 separator.
+- **T5 — width pressure on the tag (C33).** Same built-in row at width 29:
+  `" 1.explore   [built-in] "` (24 cells, no pad); at width 28:
+  `" 1.explore   [built-i… "` (23 cells); at the `MIN_ROW_CELLS` floor 19:
+  `" 1.explore    "` (14 cells, empty slot, separator kept). A member row at
+  width 28 keeps the model rule and never shows the tag:
+  `" 1.coder     Go/Kimi … "` (23 cells: budget 9 gives provider `Go` plus
+  `/` plus `Kimi …`, filling the 9-cell column exactly).
+
+### A.10 instance-model scenarios (exact values)
+
+Width 35 unless stated. Both operands are the unclipped short labels (C35);
+the instance row uses `└` when it is the only instance of its role (C10).
+Every head below is 30 cells at width 35, so every row is 35 cells with its
+5 boxes in columns 31–35; T11 lowers the width and T13 raises it, and both
+state their own heads.
+
+- **T6 — equal models, member role: the cell is omitted.** Charter snapshot
+  `[coder]` with `coder.model = "Go/Kimi K3.1 Pro"`; one running in-scope
+  coder child at 1000, title `Inspect modules`, no own model, no ancestor
+  model, so R8 step 2 resolves the live definition `Go/Kimi K3.1 Pro`; the
+  baseline is the snapshot's `Go/Kimi K3.1 Pro`. Equal → omitted. At
+  50 tokens/sec: role `" 1.coder     Go/Kimi K3.1 Pro "` + `"▓▓▓░░"`, instance
+  `" └ Inspect…                   "` + `"▓▓▓░░"`. The instance head is 3 indent
+  + 8 title + 1 gap + 17 blank model-column cells + 1 separator = 30; the
+  boxes start in column 31.
+- **T7 — differing models, member role: the cell renders.** Same role; the
+  child has its own session model `Go/Grok 4.7`, so R8 step 1 wins and the
+  labels differ. Instance `" └ Inspect… Go/Grok 4.7       "` + `"▓▓▓░░"`
+  (11-cell label + 6 pad + 1 separator after the title gap). Discriminator:
+  with its own session model `Go/Kimi K3.1 Pro Max`, the label still renders
+  — `" └ Inspect… Go/Kimi K3.…      "` (the 12-cell split text + 5 pad + 1
+  separator) — because the comparison happens before clipping; both labels
+  clip to `Go/Kimi K3.…`, so a post-clip comparison would omit and fail.
+- **T8 — temporary built-in with a definition model: equal, so omitted; the
+  tag is not the baseline.** Charter snapshot `[coder]`; live `general`
+  definition model `Go/Grok 4.7`; one running in-scope `general` child,
+  title `Audit`, no own/ancestor model → R8 step 2 gives `Go/Grok 4.7`; the
+  role baseline is the same live definition model → omitted, even though the
+  role row displays the tag. Rows: `" 1.general   [built-in]       "` + its
+  bar, then `" └ Audit                      "` + its bar (3 + 8 + 1 + 17 + 1;
+  19 spaces after the padded title). Differing twin: the child's own session
+  model is `Go/Kimi K3.1 Pro` → `" └ Audit    Go/Kimi K3.…      "`
+  (4 spaces after `Audit`, the 12-cell split text, 5 pad, 1 separator).
+- **T9 — unknown == unknown: equal, so omitted.** Charter snapshot `[coder]`
+  with no `coder.model`; one running coder child with no own/ancestor model
+  and no live definition model → R8 fallback `UNKNOWN_MODEL`; baseline
+  `UNKNOWN_MODEL`. Equal → omitted. Role `" 1.coder                      "`
+  (30 cells: 22 spaces after `coder`) + `"░░░░░"`; instance
+  `" └ Inspect…                   "` + its bar. This is the F29 case.
+  Asymmetric twin: baseline known (`Go/Kimi K3.1 Pro`), instance unknown →
+  the cell renders `" └ Inspect… unknown mod…      "` (12-cell clipped unknown
+  text + 5 pad + 1 separator).
+- **T10 — instance resolves while the role model is missing: renders.** Same
+  `coder` with no definition model (baseline `UNKNOWN_MODEL`); the child has
+  its own session model `Go/Grok 4.7` → differs → `" └ Inspect… Go/Grok 4.7       "`.
+  Role row stays `" 1.coder                      "`. Churn twin: on a later
+  pass the member definition gains `Go/Grok 4.7` (next snapshot only, A.8),
+  the labels agree, and the same row loses the cell — no grace, no timer, no
+  stored flag.
+- **T11 — width pressure on the filler slot (C36).** Omitted label at width
+  29: head `" └ Inspect…             "` (24 cells: 13 spaces after the title).
+  At width 19 (column 1): head `" └ Inspect…   "` (14 cells: gap 1 + 1 blank
+  cell + separator 1), row `" └ Inspect…   "` + `"░░░░░"` = 19 cells. Shown
+  label at width 19: `fitModel(label, 1)` falls to `clip(label, 1)` = `"…"`,
+  head `" └ Inspect… … "` (14 cells) — same geometry, different content, so
+  the boxes stay in columns 15–19 either way. The title field is 8 cells in
+  every one of these rows (C11).
+- **T12 — mixed rows keep the bar aligned.** Same role as T6 with two
+  instances: at 1000 title `Inspect modules`, no own model (equal → omitted);
+  at 2000 title `Audit`, own model `Go/Grok 4.7` (differs → shown). Rows:
+  role `" 1.coder     Go/Kimi K3.1 Pro "`, then
+  `" ├ Inspect…                   "`, then
+  `" └ Audit    Go/Grok 4.7       "`. All three heads are 30 cells and all
+  three bars occupy columns 31–35: the omitted row and the shown row keep the
+  separator in the same column, which is R5's last-5-columns invariant.
+- **T13 — the role rendering cap is not the comparison operand.** Width 40
+  (role column 21, instance column 22). Charter snapshot `[coder]` with
+  `coder.model` whose short label is `Go/Kimi K3.1 Pro Maxx` (21 cells); one
+  running in-scope coder child at 1000, title `Inspect modules`, resolving the
+  **same ref** (own session model absent, live definition identical), at
+  50 tokens/sec.
+  `ROLE_MODEL_MAX_CELLS` caps the role text to `fitModel(label, 20)` =
+  `Go/Kimi K3.1 Pro Ma…` (20 cells) and the column pads it to 21, but the
+  comparison uses the unclipped 21-cell short label on both sides → equal →
+  omitted. Role `" 1.coder     Go/Kimi K3.1 Pro Ma…  "` (35 cells: 3 + 9 + 1 +
+  21 + 1) + `"▓▓▓░░"`; instance `" └ Inspect…                        "`
+  (35 cells: 3 + 8 + 1 + 22 + 1; 24 spaces after the title) + `"▓▓▓░░"`.
+  Row 40 cells, boxes 36–40. A comparison against the rendered or capped text
+  (20 cells) would differ from the 21-cell resolved label and wrongly show
+  the instance label; the fixture fails that.
+- **T14 — variant-only difference compares equal.** Width 35. The role
+  definition ref is `{ providerID: "go", id: "kimi", variant: "high" }`,
+  whose R8 full label is `Go/Kimi K3.1 Pro (high)` and whose short label is
+  `Go/Kimi K3.1 Pro`; the running in-scope coder child (50 tokens/sec) owns the ref
+  `{ providerID: "go", id: "kimi" }`, full label `Go/Kimi K3.1 Pro`, short
+  label `Go/Kimi K3.1 Pro`. The short labels are identical, so the cell is
+  omitted (F30). Role `" 1.coder     Go/Kimi K3.1 Pro "` + `"▓▓▓░░"`,
+  instance `" └ Inspect…                   "` + `"▓▓▓░░"`. A ref-identity
+  comparison would see the variant and show the label; the fixture fails
+  that. The full labels differ, which is why this fixture also pins that the
+  operand is the short label, not the full one.
+
 ## 7. Known gaps
 
 Where the current code, read-only, disagrees with this design. Each gap is a
 Coder task; findings and fixes reference these IDs. D1 is the one entry that is
-not a gap: it registers a temporary diagnostic, with no contract number.
+not a gap: it registers a temporary diagnostic, with no contract number. Line
+references were refreshed against the tree in the A.9 round; an entry marked
+"closed in code" no longer disagrees with the code and is kept for
+traceability, not as a task.
 
 - **G1 (R11)** — No guard around source reads, view building, or colour
   parsing. An exception inside `sources()` or `panel()` leaves the slot
@@ -1077,7 +1457,7 @@ not a gap: it registers a temporary diagnostic, with no contract number.
   at width > 39. The design uses `width − 19` (role) and `width − 18`
   (instance) columns, one separator cell before the boxes, the cap on the
   label **text**, and a floor of 19 (C7, C8, C13, C14, C15).
-- **G10 (R5) — mostly obsolete; the width constants still move (G9).** The
+- **G10 (R5) — closed in code; references refreshed.** The
   old claims are gone from the code: the instance column has its own
   `INSTANCE_FIXED_CELLS` / `INSTANCE_MODEL_CELLS`, the role cap has
   `ROLE_MODEL_MAX_CELLS`, and the former bare literals (`1000`, `96`, `10`,
@@ -1085,33 +1465,41 @@ not a gap: it registers a temporary diagnostic, with no contract number.
   reverses A.3's layout move: `ROLE_FIXED_CELLS` 18 → 19,
   `INSTANCE_FIXED_CELLS` 17 → 18, `INSTANCE_MODEL_CELLS` 13 → 12, and
   `ROLE_BAR_GAP_CELLS = 1` / `INSTANCE_BAR_GAP_CELLS = 1` reinstated as two
-  separate constants (`src/lib/collect.ts:255`, `:267`, `:270`; `roleHead`
-  `:408-416`, `instanceHead` `:419-424`). `head` keeps its `W − 5` length and
+  separate constants (`src/lib/collect.ts:295`, `:313`, `:310`; `roleHead`
+  `:454-462`, `instanceHead` `:465-470`). `head` keeps its `W − 5` length and
   now ends with the separator cell; the TUI appends the boxes flush
-  (`src/tui.tsx:319-321`). `MIN_ROW_CELLS = 19` stays the floor (F1). The
+  (`src/tui.tsx:344-346`). `MIN_ROW_CELLS = 19` stays the floor (F1). The
   60 / 1000 in `elapsed` are time units, not field widths.
 - **G11 (R2, R3, R5)** — `truncate` counts UTF-16 code units, not display
   cells; wide characters and surrogate pairs misalign the boxes. The design
   measures cells (§0).
 - **G12 (R9)** — The picker clips `agent · model` together at 96; the design
   clips the model label at `PICKER_MODEL_CELLS` and the agent separately at
-  `PICKER_AGENT_CELLS`, with independent budgets (C28, C29).
-- **G13 (R6)** — Working role rows never receive the busiest instance's
-  metric, so their boxes render in the muted (unknown) colour. The wiring is
-  unchanged in shape but carries a new metric: `panel()` must pass the
+  `PICKER_AGENT_CELLS`, with independent budgets (C28, C29). The live filter
+  (`src/tui.tsx:414-417`, the dialog `search` callback) matches the raw
+  `RunningSubagent` records through `filterRows` — `agent`, full `model`,
+  `title`, elapsed text, session ID — not the clipped display strings
+  (design R9's filter bullet). Fixture: model `"m"` × 96 + `"XY"` (98 cells)
+  displays as 95 `m` + `…` (96 cells, C24), yet typing `XY` still matches the
+  row because `filterRows` sees the full 98-cell field.
+- **G13 (R6) — closed in code; references refreshed.** Working role rows
+  receive the busiest instance's
+  metric. The wiring is
+  unchanged in shape but carries a new metric: `panel()` passes the
   busiest **active** instance's `tps` to the role row, not a `pct`
-  (`src/lib/collect.ts:628-634`). `pct` is gone from `PanelRow` and from
-  `RunningSubagent` (`:82`).
+  (`src/lib/collect.ts:699-705`). `pct` is gone from `PanelRow` and from
+  `RunningSubagent` (`:107`).
 - **G14 (R4) — withdrawn at review.** The fallback `time.updated`, then
   `time.created`, and no grace row when neither exists, is already implemented
-  (`src/lib/collect.ts:385-387`). No discrepancy; the remaining open point is
+  (`src/lib/collect.ts:583`). No discrepancy; the remaining open point is
   the Product wording in F8.
 - **G15 (R7)** — Overflow skips a non-fitting section and continues with
   later sections, which can show a lower-priority role after a folded
   higher-priority one. The design stops the body at the first non-fitting
   section (F5).
-- **G16 (R6, §2 availability) — survives, re-scoped to speed; two triggers.**
-  The sync path exists (`syncSession` / `resyncMessages`, `src/tui.tsx:92-108`)
+- **G16 (R6, §2 availability) — closed in code; references refreshed.** Two
+  triggers.
+  The sync path exists (`syncSession` / `resyncMessages`, `src/tui.tsx:190-228`)
   and loads the session, then its messages, then bumps the view. Its
   `syncedSessions` guard makes the session load once-per-session, so messages
   that arrive after the first sync never reach the cache and `tps` freezes at
@@ -1127,56 +1515,76 @@ not a gap: it registers a temporary diagnostic, with no contract number.
   review by inspection, not by a pure-layer fixture (R12). A.8 does not narrow
   the sync gate: a temporary builtin is a visible agent, so its session syncs
   and its bar fills like a member's (G20).
-- **G17 (R6)** — The speed computation does not exist. `lastUsage`
-  (`src/lib/collect.ts:157-165`) and `contextPct` (`:167-179`) read the newest
-  token report over `limit.context`; `contextLimit` (`:148-155`) finds the
-  limit; `barFill` (`:454-458`) divides a percentage; `pushInstance` (`:607`)
-  and the role aggregation (`:628-634`) pass `pct`. Required: a pure
-  `speedTps(messages)` that keeps only counted assistant messages (§R6
-  filter), returns `1000 × Σ tokens.output / Σ (completed − streamed)` or
-  `undefined`; `barFill(tps)` = `clamp(#{b ∈ FILL_BANDS[0..3] : tps >= b} +
-  (tps > FILL_BANDS[4] ? 1 : 0), FILL_MIN_BOXES, FILL_MAX_BOXES)`;
-  `barTone(filled)` = `filled > 0 ? "success" : "muted"`.
-  `contextLimit`, `contextPct`, `lastUsage`, `PERCENT`, `WARNING_MIN_PCT`,
-  `ERROR_MIN_PCT`, `BAR_MIN_FILL`, `row.pct`, `RunningSubagent.pct` and
-  `TPS_PER_BOX` are deleted.
-  Constants move (A.6, values at A.7): `TPS_PER_BOX` is replaced by the ordered
-  `FILL_BANDS = [5, 20, 50, 70, 100]` (floors 1–4 inclusive, floor 5
-  exclusive); `FILL_MIN_BOXES` / `FILL_MAX_BOXES`
-  stay as the clamps, and `barFill` keeps the
+- **G17 (R6) — closed in code; references refreshed.** The speed computation
+  exists: `speedTps` (`src/lib/collect.ts:193-223`) keeps only counted
+  assistant messages (§R6 filter) and returns
+  `1000 × Σ tokens.output / Σ (completed − streamed)` or `undefined`;
+  `barFill` (`:501-507`) is the C19 formula; `barTone` (`:510-512`) is
+  `filled > 0 ? "success" : "muted"`; `pushInstance` (`:672-691`) and the role
+  aggregation (`:699-705`) pass `tps`. `contextLimit`, `contextPct`,
+  `lastUsage`, `PERCENT`, `WARNING_MIN_PCT`, `ERROR_MIN_PCT`, `BAR_MIN_FILL`,
+  `row.pct`, `RunningSubagent.pct` and `TPS_PER_BOX` are absent from the tree.
+  Constants (A.6, values at A.7): `FILL_BANDS = [5, 20, 50, 70, 100]` (floors
+  1–4 inclusive, floor 5 exclusive); `FILL_MIN_BOXES` / `FILL_MAX_BOXES` are
+  the clamps (`:319`, `:322`), and `barFill` keeps the
   `(tps: number | undefined) => number` signature, so its call sites
-  (`src/tui.tsx:152`, `src/lib/collect.ts:607`, `:627`) already pass `tps`
+  (`src/tui.tsx:173`, `src/lib/collect.ts:666`, `:686`) already pass `tps`
   and need no change of shape.
   Recompute triggers: any watched host event (already bumps the
   signal), `session.step.ended` and `session.message.content.updated` after
   their re-sync (G16), and the
-  existing 1 s ticker (`src/tui.tsx:198-202`) while it runs — speed itself
+  existing 1 s ticker (`src/tui.tsx:315-319`) while it runs — speed itself
   never reads `now`, so a tick without new message data is a no-op.
-- **G18 (R6)** — Box colour is a three-band ramp: `barColor`
-  (`src/tui.tsx:120-132`) maps `barBand(pct)` to success/warning/error and
-  `:228` passes `row.pct`. Required: colour from `barTone(row.filled)` alone —
+- **G18 (R6) — closed in code; references refreshed.** Box colour comes from
+  `barColor`
+  (`src/tui.tsx:240-243`), which maps `barTone(filled)` to success/muted, and
+  `:345` passes `row.filled`. Required: colour from `barTone(row.filled)` alone —
   filled cells `theme.text.feedback.success.base`, empty cells
   `theme.text.muted`, no warning or error path. The row **text** keeps its
   existing state colours (idle muted, grace warning, agent colour), which is
   a separate field.
-- **G19 (R6)** — The box literals are `FILL = "▮"` (U+25AE) and
-  `EMPTY = "▯"` (U+25AF) (`src/tui.tsx:26-27`). Required: `BAR_GLYPH_FILLED =
-  "▓"` (U+2593) and `BAR_GLYPH_EMPTY = "░"` (U+2591), one constant each, no
-  other literal. Nothing else in the bar changes: `BAR_CELLS` stays 5, the
+- **G19 (R6) — closed in code; references refreshed.** The box literals are
+  `BAR_GLYPH_FILLED = "▓"` (U+2593) and
+  `BAR_GLYPH_EMPTY = "░"` (U+2591), one constant each, in the pure layer
+  (`src/lib/collect.ts:268`, `:271`), rendered by the TUI from those imports
+  (`src/tui.tsx:345-346`); no `▮` (U+25AE) / `▯` (U+25AF) literal remains.
+  Nothing else in the bar changes: `BAR_CELLS` stays 5, the
   arithmetic and colours are untouched (C30, C31, A.4).
-- **G20 (R1, R2, R3, R4, R7, §2.1, A.8)** — Member selection is live today:
-  `panel()` builds `roles` from every visible agent and `total` from its length
-  (`src/lib/collect.ts:504`, `:683`), so builtins always get idle rows even
-  when charter definitions exist, and a builtin can never be a temporary row
-  because it is always a member. Required: export `memberSet` and
-  `BUILTIN_AGENT_IDS` (C32); add `members` to `Sources`; take the snapshot once
-  in `src/tui.tsx` setup and pass it on every pass; make idle rows and `total`
-  come from `members.roles`; admit a busy section for a visible charter-mode
-  builtin that is not a member; leave `working` as the busy-active count. The
+- **G20 (R1, R2, R3, R4, R7, §2.1, A.8) — closed in code; references
+  refreshed.** Member selection is the A.8 snapshot now:
+  `panel()` reads `sources.members` and takes `total` from its roles
+  (`src/lib/collect.ts:547`, `:740`); `memberSet` and `BUILTIN_AGENT_IDS` are
+  exported (`:72`), the TUI takes one snapshot per location
+  (`src/tui.tsx:105-116`, `:443-445`), and only a non-member visible builtin
+  with an instance gets a section (`src/lib/collect.ts:552-561`).
+  The obligations recorded here stand: idle rows and `total`
+  come from `members.roles`; a busy section is admitted for a visible
+  charter-mode builtin that is not a member; `working` stays the busy-active
+  count. The
   member snapshot's `AgentInfo` values serve member rows; the live list serves
   temporary builtins and R8. `isVisibleChild` stays permissive (any visible
   agent), or a temporary builtin's messages never sync (G16). R5 arithmetic,
-  R6 bars, glyphs, tones and every C1–C31 value are unchanged.
+  R6 bars, glyphs, tones and every C1–C34 value are unchanged.
+- **G21 (R2, A.9)** — Built-in role rows print the model label today: `roleHead`
+  (`src/lib/collect.ts:454-462`) always fits `model` into the column, and every
+  busy and idle section carries one (`:606`, `:639`). Required: pass
+  `agent.id ∈ BUILTIN_AGENT_IDS` into `roleHead` and take the C34 slot branch
+  (`padCells(clip(BUILTIN_TAG_TEXT, W−19), W−19)`), export `BUILTIN_TAG_TEXT`
+  (C33), and leave instance rows, `barFill`, `barTone`, `PanelRow`, and every
+  existing width constant untouched. No TUI change: the tag rides in
+  `row.head` (`src/tui.tsx:344`). Fixtures T1–T5 pin the exact strings.
+- **G22 (R3, A.10)** — Instance rows always print a model label: `instanceHead`
+  (`src/lib/collect.ts:484-488`) always fits and pads a label, and
+  `pushInstance` (`:696-711`) passes `instanceLabel(...)` (`:770-776`), which
+  always returns text. Required: `instanceLabel` takes the section's role
+  baseline (the section's definition label, mapped to `UNKNOWN_MODEL` when
+  absent) and returns `undefined` when the two resolved short labels are equal
+  (C35); `instanceHead` takes `string | undefined` and fills the column with
+  spaces when undefined (C36); `pushInstance` passes `section.model` and maps
+  the empty string through the same `resolvedShort` helper, not through a
+  second unknown constant. `PanelRow`, the TUI (`src/tui.tsx:344`), every width
+  constant, and all C1–C34 values are unchanged. Fixtures T6–T14 pin the exact
+  strings.
 - **D1 debug option (temporary diagnostic, not in the contract).** The plugin
   accepts `debug: true` or `debug: "<path>"` and appends one JSONL record per
   recompute to `/tmp/opencode/subagent-model-debug.jsonl`; the string form
@@ -1196,7 +1604,8 @@ settled by the Designer alone; the Project Manager takes them to the Analyst
 updates; F16 is settled (human decision A1); F17 is obsolete at A.3; F18–F22
 are the new decisions A.3 forces; F23 is settled (human decision A.4); F24 is
 settled (human decision A.5); F20 is obsolete at A.6 (human decision).
-F25–F28 are the new points A.8 surfaces. F16, F17, F20, F23 and F24 are listed
+F25–F28 are the new points A.8 surfaces; F29–F30 are the new points A.10
+surfaces. F16, F17, F20, F23 and F24 are listed
 with their source rather than as requests for an answer.
 
 - **F1 (R5 width domain).** R5 gives no lower bound on `width`. Below 19 cells
@@ -1236,16 +1645,19 @@ with their source rather than as requests for an answer.
 - **F8 (R4 timestamp).** R4 assumes an end time for the 30 s window but
   Product names no field. The design uses `time.updated`, then
   `time.created`, and shows no grace row when both are missing. The code
-  already implements this fallback (`src/lib/collect.ts:385-387`); only the
+  already implements this fallback (`src/lib/collect.ts:583`); only the
   Product wording is open. Confirm.
 - **F9 (R1 compact and R9 picker scope).** Neither requirement states a tab
   scope for the compact count or the picker. The design scopes the compact
   count like the panel (viewed tab) and makes the picker global (all running
   subagents). Confirm.
-- **F10 (R10 toggle visibility).** "Hidden when the config forces `compact`"
-  names only the compact case, but `compact: false` in config also pins the
-  mode, so a persisted toggle could never take effect. The design hides the
-  toggle whenever the config sets `compact` to any boolean. Confirm.
+- **F10 (R10 toggle visibility) — settled by the Product update.** R10 now
+  reads "disabled (but still shown in the palette) when the config forces
+  `compact`" (`docs/Product.md` R10). The design gates the toggle with
+  `enabled = (configured compact is not a boolean)` instead of unregistering
+  it, so a config that forces the mode — including `compact: false`, which
+  pins full mode — leaves the palette entry visible-but-disabled. Design and
+  Product agree; no answer needed.
 - **F11 (R3 no viewed session).** R3 scopes instance rows to "the tab
   currently viewed", but does not say what the panel shows when no tab is
   viewed. The design uses an empty instance set: no instance rows, every role
@@ -1371,6 +1783,23 @@ with their source rather than as requests for an answer.
   solely in another tab has no row here (and no idle builtin row). Confirm, or
   say the temporary row must appear for an out-of-scope session with no
   visible instance line.
+- **F29 (R3, A.10 unknown vs unknown) — settled by PM arbitration.** R3 says
+  the model label renders "when the instance's resolved model differs from the
+  role's own resolved model, or when the instance's model is unknown", then
+  says "When the labels agree, the model cell is omitted." When both sides
+  resolve to no model, both clauses fire. The settled reading is the omit
+  branch (C35, T9): both sides map through one helper to `UNKNOWN_MODEL`, they
+  compare equal, the model cell adds no distinguishing fact, and the role
+  row's column is blank too. If Product later prefers "always render an
+  unknown instance model", C35 plus T9 move in the same commit. Recorded as a
+  settled decision, not an open question.
+- **F30 (R3, A.10 variant-only difference) — settled by PM arbitration.** The
+  comparison operands are short labels, and the short label drops the variant
+  (R8). Two refs that differ only by variant therefore compare equal and the
+  cell is omitted (T14); a rendered label would show identical text, adding no
+  information. A variant marker in the short label is not adopted, because it
+  would move R8's label rule and the field's 12-cell budget. Recorded as a
+  settled decision, not an open question.
 
 ## 9. Revision notes
 
@@ -1436,3 +1865,85 @@ with their source rather than as requests for an answer.
   running builtin already appears and nothing idle is listed; its reference to
   R3's running-child predicate stays true because that predicate is unchanged,
   only the role attribution is.
+- **A.9 built-in tag amendment.** Human decision at the R2 level: a built-in
+  role row shows no model label and carries `[built-in]` instead, in charter
+  mode (temporary rows) and built-in mode (permanent rows); instance rows of a
+  built-in keep their model label and never carry the tag; a member row of a
+  non-builtin agent is unchanged. **New numbers:** `BUILTIN_TAG_TEXT` = 10
+  cells (C33) and the tag slot rule (C34: tag fills the existing role model
+  column, `clip` to `W−19`, padded, so no width, instance column or member
+  column moves). No other C value moved; `ROLE_MODEL_MAX_CELLS` is not applied
+  to the tag. **Fixtures:** T1–T5 in §6 and the §1.1 width ladder examples
+  (W 35 / 29 / 28 / 19), plus the member regression string
+  `" 1.coder     Go/Kimi K3.1 Pro "` and the built-in instance twin
+  `" ├ Inspect… Go/Grok 4.7       "`. **Precedence:** the name clip stays
+  inside `ROLE_NAME_CELLS`, so a 10-cell name cannot eat the tag (T4).
+  **Colour:** the tag is row text, so it takes the idle/active/warning row
+  colour; `barTone`, `barFill` and the box colours are untouched (§3, R6).
+  **Composition:** `roleHead` in the pure layer builds the tag row and the TUI
+  renders `row.head` verbatim, so the exact tag-row fixtures are pinned
+  through `panel()` in `src/lib/collect.test.ts`; this settles the earlier
+  flag about title-string fixtures living outside the pure layer — role heads
+  were already pure, and no TUI-side built-in head builder is added (§1.1).
+  **Moved:** §0 (built-in role, `head`), R2, R5 (role field note), §1.1, §1.3,
+  §2.1 (temporary-row bullet), §3 (tag colour), §5 (role row reads no model
+  for a built-in), §6 (C33, C34, and the A.9 scenario subsection under
+  `### A.9 built-in tag scenarios`), §7 (new G21). R8's resolution order is
+  unchanged.
+  **Same round, doc cleanup (no behaviour change):** every §7 line reference
+  was refreshed against the current tree and each entry whose stated code fact
+  the A.8 commit superseded is marked "closed in code" (G10, G13, G16, G17,
+  G18, G19, G20; F8's reference too), with no obligation text changed; §2's
+  `context.ui.router.current()` source row was removed because no reader
+  exists — opening a picked session is `tabs.focus` /
+  `router.navigate` (`src/tui.tsx:373-378`); and §R10 now describes the toggle
+  as always registered with `enabled = options.compact === undefined`
+  (`src/tui.tsx:513-518`), visible-but-disabled rather than unregistered. The
+  Product R10 update ("disabled (but still shown in the palette)") settles the
+  wording, so design and Product agree and F10 is closed with no open answer.
+- **A.10 instance-model omission amendment.** Human decision at the R3 level:
+  the instance model short label renders only when it differs from the role's
+  own resolved model, or when the instance's model is unknown; labels are
+  compared on the resolved short values **before** any clipping; when they
+  agree the cell is omitted. **New numbers/rules:** C35 (visibility rule:
+  `resolvedShort(instanceRef) !== resolvedShort(roleRef)`, one helper mapping
+  an absent ref to `UNKNOWN_MODEL`) and C36 (omitted-slot rule: the same
+  `W − 18` column holds spaces; title stays 8 cells, separator and boxes do
+  not move). No width constant, no C1–C34 value, no glyph, no tone and no §1
+  column changed; `INSTANCE_MODEL_CELLS = 12` still caps the text when shown.
+  **Layout decision:** filler slot, not reflow, because reflow would widen the
+  title past C11 or move the model field's start column and make the bar
+  column depend on the title; the filler keeps `head = W − 5` with the
+  separator at `W − 5`, so R5's last-5-columns invariant holds on mixed rows
+  (T12). **Comparison operands:** instance side is R8 unchanged; role side is
+  the section definition's `agent.model` (snapshot member, live temporary
+  entry) mapped to the short label, `UNKNOWN_MODEL` when absent. A built-in
+  role's `[built-in]` tag is never the operand; its definition model still is
+  the baseline even though A.9 forbids printing it (C34/A.9 unchanged).
+  Unknown vs unknown compares equal → omitted (F29, settled). Variant-only
+  differences compare equal → omitted (F30, settled). **Churn:** the comparison runs on
+  every `panel()` pass and is never cached, so a row can gain or lose the cell
+  mid-session with no grace/timer/state effect; the role baseline for a member
+  is the A.8 snapshot (stable) while instance resolution reads the live list
+  (R8 step 2), so a post-snapshot definition change can move the instance side
+  only. **Colour:** unchanged (row text rule, `barTone` untouched).
+  **Composition:** `instanceLabel` in `src/lib/collect.ts` gains the role
+  baseline and returns `string | undefined`; `instanceHead` blanks the column
+  for `undefined`; the TUI keeps rendering `row.head` verbatim, so T6–T14 are
+  pinned through `panel()` in `src/lib/collect.test.ts`. **Moved:** §0 (new
+  Role baseline term, `head`), R2 (one parenthesis), R3 (fields, comparison
+  operands, recompute, cap), R5 (instance field), §1.2 (table, formula,
+  examples), §1.3 (comparison precedes clipping), §2 (source rows, new
+  paragraph), §2.1 (member and temporary baselines), §3 (colour bullet), §5
+  (A.10 paragraph), §6 (C35, C36, the A.10 scenario subsection T6–T14, and
+  S4 reworded for the A.10 omission), §7
+  (new G22), §8 (F29, F30). **Doc consistency fix in the same round (A.9
+  review finding, no behaviour change):** the single-instance rows in T2 and
+  C34 quoted `├`; C10 requires `└` on the last instance, so both now read
+  `└` (`" └ Audit    Go/Grok 4.7       "`, `" └ Inspect… Go/Grok 4.7       "`).
+  **A.10 round-1 review fixes:** the three split-rule fixtures (C35's differ
+  case, T7's discriminator, T8's differing twin) now pin `Go/Kimi K3.…`, the
+  value §1.3 computes at budget 12 with provider `Go`; §1.2's shown example
+  reads 6 pad cells for an 11-cell label; T13 (the role text cap is not the
+  comparison operand) and T14 (variant-only equality) were added; F29 and F30
+  are recorded as settled by PM arbitration, not open questions.

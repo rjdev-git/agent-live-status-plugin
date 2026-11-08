@@ -6,6 +6,7 @@ import {
   BAR_GLYPH_FILLED,
   BODY_MAX_LINES,
   BUILTIN_AGENT_IDS,
+  BUILTIN_TAG_TEXT,
   DEFAULT_WIDTH,
   ELLIPSIS_CELLS,
   FILL_BANDS,
@@ -265,9 +266,8 @@ test("fitModel gives the provider half at most and the model the rest", () => {
 
 test("instance rows show an 8-cell title and a 12-cell model", () => {
   const NOW = 1_000_000
-  const agents = [
-    { id: "aa", name: "Alpha", mode: "subagent", model: { id: "deepseek-flash", providerID: "deepseek" } },
-  ]
+  // The role has no baseline model, so the instance label is shown (A.10).
+  const agents = [{ id: "aa", name: "Alpha", mode: "subagent" }]
   const sources: Sources = {
     sessions: fakeSessions(
       [
@@ -505,7 +505,8 @@ test("C5 ROLE_NAME_CELLS = 9 clips names with an ellipsis", () => {
 
 test("C6 ROLE_NAME_GAP_CELLS = 1 keeps the gap column clear", () => {
   assert.equal(ROLE_NAME_GAP_CELLS, 1)
-  const agents = [agent("explore", "explore", { model: { id: "kimi", providerID: "go" } })]
+  // A non-builtin id: built-in role rows show the tag instead (A.9).
+  const agents = [agent("coder", "explore", { model: { id: "kimi", providerID: "go" } })]
   const sources: Sources = {
     sessions: fakeSessions([{ id: "root" }]),
     agents,
@@ -666,7 +667,8 @@ test("C15 one separator cell sits between the model column and the boxes", () =>
   assert.equal(INSTANCE_BAR_GAP_CELLS, 1)
 
   const roleHead = (id: string, name: string) => {
-    const agents = [agent("explore", "explore", { model: { id, providerID: "go" } })]
+    // A non-builtin id keeps the member model rule under test (A.9).
+    const agents = [agent("coder", "explore", { model: { id, providerID: "go" } })]
     return panel(
       {
         sessions: fakeSessions([{ id: "root" }]),
@@ -982,8 +984,26 @@ test("C27 UNKNOWN_MODEL is the last resolution fallback", () => {
   const sources: Sources = { sessions: fakeSessions([{ id: "s1" }]) }
   assert.equal(resolveModel(sources.sessions.list()[0], sources), "unknown model")
 
+  // A known snapshot baseline keeps the unknown instance label visible (A.10);
+  // the live definition carries no model, so R8 falls through to `unknown model`.
+  const knownRole = agent("aa", "Alpha", {
+    model: { id: "deepseek-flash", providerID: "deepseek" },
+  })
+  const liveRole = agent("aa", "Alpha")
   const unknown = (width: number) =>
-    panel(rootSources([child("u", "aa", 100)], [agent("aa", "Alpha")], ["u"]), "root", width, BODY_MAX_LINES, 0)
+    panel(
+      {
+        sessions: fakeSessions([{ id: "root" }, child("u", "aa", 100)], ["u"]),
+        agents: [liveRole],
+        models,
+        providers,
+        members: memberSet([knownRole]),
+      },
+      "root",
+      width,
+      BODY_MAX_LINES,
+      0,
+    )
   // Width 30 leaves a 12-cell instance column: the 13-cell text clips.
   assert.equal(unknown(30).rows[1].head.slice(12, 24), "unknown mod…")
   // Width 29 leaves an 11-cell column, so the column binds.
@@ -1221,7 +1241,7 @@ test("stop rule: five instances leave room for four idle roles", () => {
 /* ------------------------------------------------------------------ */
 
 test("role row at width 35 fills the model column exactly", () => {
-  const agents = [agent("explore", "explore", { model: { id: "kimi", providerID: "go" } })]
+  const agents = [agent("coder", "coder", { model: { id: "kimi", providerID: "go" } })]
   const sources: Sources = {
     sessions: fakeSessions([{ id: "root" }]),
     agents,
@@ -1230,7 +1250,7 @@ test("role row at width 35 fills the model column exactly", () => {
     members: memberSet(agents),
   }
   const head = panel(sources, undefined, 35, BODY_MAX_LINES, 0).rows[0].head
-  assert.equal(head, " 1.explore   Go/Kimi K3.1 Pro ")
+  assert.equal(head, " 1.coder     Go/Kimi K3.1 Pro ")
   assert.equal(cellWidth(head), 30)
 })
 
@@ -1291,7 +1311,8 @@ test("speed bar follows the separator at width 35 (filled = 3)", () => {
 
   const role = panel(sources, "root", 35, BODY_MAX_LINES, NOW).rows[0]
   assert.equal(role.filled, 3)
-  assert.equal(role.head + bar(role.filled), " 1.explore   Go/Kimi K3.1 Pro ▓▓▓░░")
+  // A.9: the built-in role row carries the tag; the bar is untouched.
+  assert.equal(role.head + bar(role.filled), " 1.explore   [built-in]       ▓▓▓░░")
   assert.equal(cellWidth(role.head + bar(role.filled)), 35)
 })
 
@@ -1392,6 +1413,14 @@ function blankRoleHead(number: number, name: string): string {
   return `${String(number).padStart(ROLE_NUMBER_DIGITS)}.${name}${" ".repeat(padding + 1 + 16 + 1)}`
 }
 
+/** A built-in role row at width 35: number, name, gap, tag, 6 pad, separator (C33, C34). */
+function tagRoleHead(number: number, name: string): string {
+  const column = DEFAULT_WIDTH - ROLE_FIXED_CELLS
+  const tag = clip(BUILTIN_TAG_TEXT, column)
+  const padding = ROLE_NAME_CELLS - name.length
+  return `${String(number).padStart(ROLE_NUMBER_DIGITS)}.${name}${" ".repeat(padding + 1)}${tag}${" ".repeat(column - cellWidth(tag) + 1)}`
+}
+
 test("C32 BUILTIN_AGENT_IDS is the host builtin registry", () => {
   assert.deepEqual(BUILTIN_AGENT_IDS, [
     "build",
@@ -1476,8 +1505,8 @@ test("S2 built-in mode lists visible builtins only", () => {
   assert.equal(view.mode, "builtin")
   assert.equal(view.total, 2)
   assert.equal(view.rows.length, 2)
-  assert.equal(view.rows[0].head, blankRoleHead(1, "explore"))
-  assert.equal(view.rows[1].head, blankRoleHead(2, "general"))
+  assert.equal(view.rows[0].head, tagRoleHead(1, "explore"))
+  assert.equal(view.rows[1].head, tagRoleHead(2, "general"))
 })
 
 test("S3 charter mode suppresses builtin idle rows", () => {
@@ -1511,13 +1540,14 @@ test("S4 temporary builtin and member both work gives 2/1", () => {
   assert.equal(view.total, 1)
   assert.equal(`${view.working}/${view.total}`, "2/1")
   assert.equal(view.rows.length, 4)
-  assert.equal(view.rows[0].head, blankRoleHead(1, "general"))
+  assert.equal(view.rows[0].head, tagRoleHead(1, "general"))
   assert.equal(view.rows[0].state, "active")
   // 8-cell title field pads without an ellipsis when it fits.
-  assert.equal(view.rows[1].head, " └ Audit    unknown mod…      ")
+  // A.10: both sides are unknown, so the model cell is omitted (C35, F29).
+  assert.equal(view.rows[1].head, " └ Audit" + " ".repeat(22))
   assert.equal(view.rows[1].head.slice(3, 11), "Audit   ")
   assert.equal(view.rows[2].head, blankRoleHead(2, "coder"))
-  assert.equal(view.rows[3].head, " └ Check    unknown mod…      ")
+  assert.equal(view.rows[3].head, " └ Check" + " ".repeat(22))
   assert.equal(view.rows[3].head.slice(3, 11), "Check   ")
 })
 
@@ -1530,8 +1560,11 @@ test("R8 a temporary builtin resolves its live definition model", () => {
   const view = panel(rootSources([audit], [general, agent("coder", "coder")], ["a-1"], {}, members), "root", 35, BODY_MAX_LINES, 0)
 
   assert.equal(view.total, 1)
-  assert.equal(view.rows[0].head, " 1.general   DeepSe…/DeepSee… ")
-  assert.equal(view.rows[1].head, " └ Audit    Deep…/DeepS…      ")
+  // A.9: the built-in role row carries the tag even when the live definition
+  // resolves a model. A.10: the instance resolves the same live definition
+  // model, so its label is equal to the baseline and the cell is omitted.
+  assert.equal(view.rows[0].head, tagRoleHead(1, "general"))
+  assert.equal(view.rows[1].head, " └ Audit" + " ".repeat(22))
 })
 
 test("S5 a succeeded temporary last instance removes both rows", () => {
@@ -1579,9 +1612,10 @@ test("S6 a failed temporary keeps both rows for exactly 30 s", () => {
   assert.equal(inside.total, 1)
   assert.equal(`${inside.working}/${inside.total}`, "0/1")
   assert.equal(inside.rows.length, 3)
-  assert.equal(inside.rows[0].head, blankRoleHead(1, "general"))
+  assert.equal(inside.rows[0].head, tagRoleHead(1, "general"))
   assert.equal(inside.rows[0].state, "grace")
-  assert.equal(inside.rows[1].head, " └ Audit    unknown mod…      ")
+  // A.10: role and instance are both unknown, so the model cell is omitted.
+  assert.equal(inside.rows[1].head, " └ Audit" + " ".repeat(22))
   assert.equal(inside.rows[1].state, "grace")
   assert.equal(inside.rows[2].head, blankRoleHead(2, "coder"))
   assert.equal(inside.rows[2].state, "idle")
@@ -1619,8 +1653,8 @@ test("S7 several temporary rows order with a member by instance start", () => {
   assert.equal(view.working, 3)
   assert.equal(view.total, 1)
   assert.equal(`${view.working}/${view.total}`, "3/1")
-  assert.equal(view.rows[0].head, blankRoleHead(1, "explore"))
-  assert.equal(view.rows[2].head, blankRoleHead(2, "general"))
+  assert.equal(view.rows[0].head, tagRoleHead(1, "explore"))
+  assert.equal(view.rows[2].head, tagRoleHead(2, "general"))
   assert.equal(view.rows[4].head, blankRoleHead(3, "coder"))
 })
 
@@ -1703,9 +1737,10 @@ test("S11 C32 boundary and the total = 0 guard", () => {
   // `total > 0`, so a total of 0 renders nothing (docs/design.md §3, F27).
   assert.equal(hidden.working, 1)
   assert.equal(hidden.rows.length, 2)
-  assert.equal(hidden.rows[0].head, blankRoleHead(1, "general"))
+  assert.equal(hidden.rows[0].head, tagRoleHead(1, "general"))
   assert.equal(hidden.rows[0].state, "active")
-  assert.equal(hidden.rows[1].head, " └ g-1      unknown mod…      ")
+  // A.10: both sides are unknown, so the model cell is omitted.
+  assert.equal(hidden.rows[1].head, " └ g-1" + " ".repeat(24))
   assert.equal(hidden.rows[1].state, "active")
   assert.equal(hidden.total > 0, false)
 })
@@ -1743,7 +1778,7 @@ test("an empty agent list locks built-in mode with no members", () => {
   const idle = panel(rootSources([], [general], [], {}, loaded), undefined, 35, BODY_MAX_LINES, 0)
   assert.equal(idle.total, 1)
   assert.equal(idle.rows.length, 1)
-  assert.equal(idle.rows[0].head, blankRoleHead(1, "general"))
+  assert.equal(idle.rows[0].head, tagRoleHead(1, "general"))
 })
 
 test("S12 the snapshot is frozen; the next activation re-decides", () => {
@@ -1764,7 +1799,7 @@ test("S12 the snapshot is frozen; the next activation re-decides", () => {
   assert.equal(frozen.mode, "charter")
   assert.equal(frozen.total, 1)
   assert.equal(frozen.working, 1)
-  assert.equal(frozen.rows[0].head, blankRoleHead(1, "general"))
+  assert.equal(frozen.rows[0].head, tagRoleHead(1, "general"))
   assert.equal(frozen.rows[2].head, blankRoleHead(2, "coder"))
   assert.equal(frozen.rows.some((row) => row.head.includes("designer")), false)
 
@@ -1799,4 +1834,431 @@ test("G20 the picker predicate still sees a running temporary builtin", () => {
     collect(sources, "root").map((row) => row.sessionID),
     ["g-1"],
   )
+})
+
+/* ------------------------------------------------------------------ */
+/* A.9 built-in tag: C33/C34 and scenarios T1-T5, exact values.        */
+/* ------------------------------------------------------------------ */
+
+const GO_MODELS = [
+  { id: "kimi", modelID: "kimi", providerID: "go", name: "Kimi K3.1 Pro" },
+  { id: "grok47", modelID: "grok47", providerID: "go", name: "Grok 4.7" },
+  { id: "kimi-max", modelID: "kimi-max", providerID: "go", name: "Kimi K3.1 Pro Max" },
+  { id: "kimi-maxx", modelID: "kimi-maxx", providerID: "go", name: "Kimi K3.1 Pro Maxx" },
+]
+const GO_PROVIDERS = [{ id: "go", name: "OpenCode Go" }]
+
+/** A panel source with the `Go/*` model catalog used by the A.9 fixtures. */
+function goSources(
+  sessions: SessionInfo[],
+  agents: AgentInfo[],
+  running: string[] = [],
+  members: MemberSet = memberSet(agents),
+): Sources {
+  return {
+    sessions: fakeSessions([{ id: "root" }, ...sessions], running),
+    agents,
+    models: GO_MODELS,
+    providers: GO_PROVIDERS,
+    members,
+  }
+}
+
+test("C33 BUILTIN_TAG_TEXT = '[built-in]' clips by the ordinary rule", () => {
+  assert.equal(BUILTIN_TAG_TEXT, "[built-in]")
+  assert.equal(cellWidth(BUILTIN_TAG_TEXT), 10)
+  assert.equal(clip(BUILTIN_TAG_TEXT, 10), "[built-in]")
+  assert.equal(clip(BUILTIN_TAG_TEXT, 9), "[built-i…")
+  assert.equal(clip(BUILTIN_TAG_TEXT, 1), "…")
+  assert.equal(clip(BUILTIN_TAG_TEXT, 0), "")
+
+  const headAt = (width: number) =>
+    panel(rootSources([], [agent("explore", "explore")]), undefined, width, BODY_MAX_LINES, 0)
+      .rows[0].head
+
+  // Fits at the 10-cell column and above; the tag plus pad fills the column.
+  assert.equal(headAt(35), " 1.explore   [built-in]       ")
+  assert.equal(headAt(29), " 1.explore   [built-in] ")
+  // Does not fit: the column clips the tag, and at the floor it vanishes.
+  assert.equal(headAt(28), " 1.explore   [built-i… ")
+  assert.equal(headAt(20), " 1.explore   … ")
+  assert.equal(headAt(19), " 1.explore    ")
+})
+
+test("C34 built-in slot holds the tag; member and instance rows keep the model", () => {
+  // Built-in role: the tag fills the model column and the bar is unchanged.
+  const explore = agent("explore", "explore", { model: { id: "kimi", providerID: "go" } })
+  const run = child("e-1", "explore", 1_000, {
+    title: "Inspect modules",
+    model: { id: "grok47", providerID: "go" },
+  })
+  const sources: Sources = {
+    sessions: fakeSessions([{ id: "root" }, run], ["e-1"], {
+      "e-1": [assistant(50, 0, 1_000)],
+    }),
+    agents: [explore],
+    models: GO_MODELS,
+    providers: GO_PROVIDERS,
+    members: memberSet([explore]),
+  }
+  const view = panel(sources, "root", 35, BODY_MAX_LINES, 0)
+  assert.equal(view.rows[0].head, " 1.explore   [built-in]       ")
+  assert.equal(
+    view.rows[0].head +
+      BAR_GLYPH_FILLED.repeat(view.rows[0].filled) +
+      BAR_GLYPH_EMPTY.repeat(BAR_CELLS - view.rows[0].filled),
+    " 1.explore   [built-in]       ▓▓▓░░",
+  )
+  // The built-in instance row keeps R8's model label and never carries the tag.
+  assert.equal(view.rows[1].head, " └ Inspect… Go/Grok 4.7       ")
+  assert.equal(view.rows[1].head.includes(BUILTIN_TAG_TEXT), false)
+
+  // Member regression twin: the same 16-cell label still renders in the slot.
+  const coder = agent("coder", "coder", { model: { id: "kimi", providerID: "go" } })
+  const memberView = panel(
+    goSources([], [coder]),
+    undefined,
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+  assert.equal(memberView.rows[0].head, " 1.coder     Go/Kimi K3.1 Pro ")
+  assert.equal(memberView.rows[0].head.includes(BUILTIN_TAG_TEXT), false)
+})
+
+test("T1 permanent built-in rows show the tag in built-in mode", () => {
+  const agents = [
+    agent("build", "build", { mode: "primary" }),
+    agent("general", "general"),
+    agent("explore", "explore"),
+    agent("title", "title", { mode: "primary", hidden: true }),
+  ]
+  const view = panel(rootSources([], agents), undefined, 35, BODY_MAX_LINES, 0)
+  assert.equal(view.mode, "builtin")
+  assert.equal(view.total, 2)
+  assert.equal(view.rows.length, 2)
+  assert.equal(view.rows[0].head + "░░░░░", " 1.explore   [built-in]       ░░░░░")
+  assert.equal(view.rows[1].head + "░░░░░", " 2.general   [built-in]       ░░░░░")
+  assert.equal(view.rows[0].state, "idle")
+  assert.equal(view.rows[1].state, "idle")
+})
+
+test("T2 temporary built-in row shows the tag; its instance keeps the model", () => {
+  const general = agent("general", "general", { color: "#00ff00" })
+  const coder = agent("coder", "coder", { model: { id: "kimi", providerID: "go" } })
+  const members = memberSet([general, coder])
+  const audit = child("a-1", "general", 1_000, {
+    title: "Audit",
+    model: { id: "grok47", providerID: "go" },
+  })
+  const view = panel(
+    goSources([audit], [general, coder], ["a-1"], members),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+
+  assert.equal(view.rows.length, 3)
+  assert.equal(view.rows[0].head, " 1.general   [built-in]       ")
+  assert.equal(view.rows[0].state, "active")
+  // The tag rides in the head, so it inherits the same row colour.
+  assert.equal(view.rows[0].agentColor, "#00ff00")
+  assert.equal(view.rows[1].head, " └ Audit    Go/Grok 4.7       ")
+  assert.equal(view.rows[1].head.includes(BUILTIN_TAG_TEXT), false)
+  assert.equal(view.rows[2].head, " 2.coder     Go/Kimi K3.1 Pro ")
+})
+
+test("T3 a live definition model is ignored on a built-in role row", () => {
+  const explore = agent("explore", "explore", { model: { id: "kimi", providerID: "go" } })
+  const coder = agent("coder", "coder", { model: { id: "kimi", providerID: "go" } })
+  // Charter member set: explore can only appear as a temporary built-in row.
+  const members = memberSet([coder, explore])
+  const run = child("e-1", "explore", 1_000, { title: "x" })
+  const view = panel(
+    goSources([run], [explore, coder], ["e-1"], members),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+
+  // explore resolves a definition model, yet its role row is still the tag.
+  assert.equal(view.rows[0].head, " 1.explore   [built-in]       ")
+  // The same 16-cell label on the member row renders unchanged.
+  assert.equal(view.rows[2].head, " 2.coder     Go/Kimi K3.1 Pro ")
+})
+
+test("T4 the name clip never eats the tag", () => {
+  const view = panel(
+    rootSources([], [agent("explore", "1234567890")]),
+    undefined,
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+  assert.equal(view.rows[0].head, " 1.12345678… [built-in]       ")
+  assert.equal(cellWidth(view.rows[0].head), 30)
+})
+
+test("T5 the tag follows the width series and a member row keeps the model rule", () => {
+  const builtinHead = (width: number) =>
+    panel(rootSources([], [agent("explore", "explore")]), undefined, width, BODY_MAX_LINES, 0)
+      .rows[0].head
+  assert.equal(builtinHead(35), " 1.explore   [built-in]       ")
+  assert.equal(builtinHead(29), " 1.explore   [built-in] ")
+  assert.equal(builtinHead(28), " 1.explore   [built-i… ")
+  assert.equal(builtinHead(20), " 1.explore   … ")
+  assert.equal(builtinHead(19), " 1.explore    ")
+
+  const coder = agent("coder", "coder", { model: { id: "kimi", providerID: "go" } })
+  const memberHead = panel(goSources([], [coder]), undefined, 28, BODY_MAX_LINES, 0).rows[0].head
+  assert.equal(memberHead, " 1.coder     Go/Kimi … ")
+  assert.equal(memberHead.includes(BUILTIN_TAG_TEXT), false)
+})
+
+/* ------------------------------------------------------------------ */
+/* A.10 instance-model visibility: C35/C36 and scenarios T6-T14.       */
+/* ------------------------------------------------------------------ */
+
+const KIMI = { id: "kimi", providerID: "go" }
+const GROK = { id: "grok47", providerID: "go" }
+
+/** Panel sources for the A.10 fixtures, with message data for the bars. */
+function a10Sources(
+  sessions: SessionInfo[],
+  agents: AgentInfo[],
+  running: string[],
+  messages: Record<string, ReadonlyArray<TestMessage>> = {},
+  members: MemberSet = memberSet(agents),
+): Sources {
+  return {
+    sessions: fakeSessions([{ id: "root" }, ...sessions], running, messages),
+    agents,
+    models: GO_MODELS,
+    providers: GO_PROVIDERS,
+    members,
+  }
+}
+
+/** Omitted at width 35: title gap 1 + 17-cell model column + separator 1. */
+const OMITTED_W35 = " ".repeat(19)
+
+test("T6 equal member models omit the instance model cell (C35)", () => {
+  const coder = agent("coder", "coder", { model: KIMI })
+  const members = memberSet([coder])
+  const run = child("c-1", "coder", 1_000, { title: "Inspect modules" })
+  const view = panel(
+    a10Sources([run], [coder], ["c-1"], { "c-1": [assistant(50, 0, 1_000)] }, members),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+
+  assert.equal(view.rows[0].head, " 1.coder     Go/Kimi K3.1 Pro ")
+  assert.equal(view.rows[1].head, " └ Inspect…" + OMITTED_W35)
+  assert.equal(cellWidth(view.rows[1].head), 30)
+  assert.equal(view.rows[0].filled, 3)
+  assert.equal(view.rows[1].filled, 3)
+})
+
+test("T7 differing member models render; the comparison precedes clipping", () => {
+  const coder = agent("coder", "coder", { model: KIMI })
+  const members = memberSet([coder])
+
+  const differing = child("c-1", "coder", 1_000, { title: "Inspect modules", model: GROK })
+  const shown = panel(
+    a10Sources([differing], [coder], ["c-1"], { "c-1": [assistant(50, 0, 1_000)] }, members),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+  assert.equal(shown.rows[1].head, " └ Inspect… Go/Grok 4.7       ")
+  assert.equal(cellWidth(shown.rows[1].head), 30)
+
+  // Both labels clip to `Go/Kimi K3.…`; only the unclipped comparison differs.
+  const capped = child("c-2", "coder", 1_000, { title: "Inspect modules", model: { id: "kimi-max", providerID: "go" } })
+  const view = panel(a10Sources([capped], [coder], ["c-2"], {}, members), "root", 35, BODY_MAX_LINES, 0)
+  assert.equal(view.rows[1].head, " └ Inspect… Go/Kimi K3.…      ")
+  assert.equal(fitModel("Go/Kimi K3.1 Pro Max", 12), "Go/Kimi K3.…")
+  assert.equal(fitModel("Go/Kimi K3.1 Pro", 12), "Go/Kimi K3.…")
+})
+
+test("T8 a temporary built-in baseline is the live model, not the tag", () => {
+  const general = agent("general", "general", { model: GROK })
+  const coder = agent("coder", "coder")
+  const members = memberSet([coder])
+  const audit = child("g-1", "general", 1_000, { title: "Audit" })
+
+  const equal = panel(a10Sources([audit], [general, coder], ["g-1"], {}, members), "root", 35, BODY_MAX_LINES, 0)
+  assert.equal(equal.rows[0].head, " 1.general   [built-in]       ")
+  assert.equal(equal.rows[1].head, " └ Audit" + " ".repeat(22))
+  assert.equal(equal.rows[1].head.includes(BUILTIN_TAG_TEXT), false)
+
+  // Differing twin: the child's own session model is not the baseline.
+  const own = child("g-2", "general", 1_000, { title: "Audit", model: KIMI })
+  const differs = panel(a10Sources([own], [general, coder], ["g-2"], {}, members), "root", 35, BODY_MAX_LINES, 0)
+  assert.equal(differs.rows[1].head, " └ Audit    Go/Kimi K3.…      ")
+})
+
+test("T9 unknown == unknown is omitted; the asymmetric twin shows (C35, F29)", () => {
+  const coder = agent("coder", "coder")
+  const members = memberSet([coder])
+  const run = child("c-1", "coder", 1_000, { title: "Inspect modules" })
+
+  const equal = panel(a10Sources([run], [coder], ["c-1"], {}, members), "root", 35, BODY_MAX_LINES, 0)
+  assert.equal(equal.rows[0].head, " 1.coder" + " ".repeat(22))
+  assert.equal(equal.rows[1].head, " └ Inspect…" + OMITTED_W35)
+
+  // Known snapshot baseline, live definition and session both without a model.
+  const known = agent("coder", "coder", { model: KIMI })
+  const knownMembers = memberSet([known])
+  const asymmetric = panel(a10Sources([run], [coder], ["c-1"], {}, knownMembers), "root", 35, BODY_MAX_LINES, 0)
+  assert.equal(asymmetric.rows[1].head, " └ Inspect… unknown mod…      ")
+})
+
+test("T10 an instance that resolves shows; churn re-evaluates every pass", () => {
+  const unknownRole = agent("coder", "coder")
+  const run = child("c-1", "coder", 1_000, { title: "Inspect modules", model: GROK })
+
+  const before = panel(
+    a10Sources([run], [unknownRole], ["c-1"], {}, memberSet([unknownRole])),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+  assert.equal(before.rows[0].head, " 1.coder" + " ".repeat(22))
+  assert.equal(before.rows[1].head, " └ Inspect… Go/Grok 4.7       ")
+  assert.equal(before.rows[1].state, "active")
+
+  // The next snapshot gains the same model: the row loses the cell with no
+  // stored flag, no grace, and no timer side effect (A.8, A.10).
+  const knownRole = agent("coder", "coder", { model: GROK })
+  const after = panel(
+    a10Sources([run], [unknownRole], ["c-1"], {}, memberSet([knownRole])),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+  assert.equal(after.rows[1].head, " └ Inspect…" + OMITTED_W35)
+  assert.equal(after.rows[1].state, "active")
+  assert.equal(after.rows[1].tps, undefined)
+})
+
+test("T11 width pressure keeps the filler slot and the separator (C36)", () => {
+  const coder = agent("coder", "coder", { model: KIMI })
+  const members = memberSet([coder])
+  const run = child("c-1", "coder", 1_000, { title: "Inspect modules" })
+
+  const at29 = panel(a10Sources([run], [coder], ["c-1"], {}, members), "root", 29, BODY_MAX_LINES, 0)
+  assert.equal(at29.rows[1].head, " └ Inspect…             ")
+  assert.equal(cellWidth(at29.rows[1].head), 24)
+
+  const at19 = panel(a10Sources([run], [coder], ["c-1"], {}, members), "root", 19, BODY_MAX_LINES, 0)
+  assert.equal(at19.rows[1].head, " └ Inspect…   ")
+  assert.equal(cellWidth(at19.rows[1].head), 14)
+  assert.equal(
+    at19.rows[1].head + BAR_GLYPH_EMPTY.repeat(BAR_CELLS - at19.rows[1].filled),
+    " └ Inspect…   ░░░░░",
+  )
+
+  // Shown at width 19: same geometry, different content.
+  const own = child("c-2", "coder", 1_000, { title: "Inspect modules", model: GROK })
+  const shown = panel(a10Sources([own], [coder], ["c-2"], {}, members), "root", 19, BODY_MAX_LINES, 0)
+  assert.equal(shown.rows[1].head, " └ Inspect… … ")
+  assert.equal(cellWidth(shown.rows[1].head), 14)
+})
+
+test("T12 mixed rows keep every bar in the last five columns", () => {
+  const coder = agent("coder", "coder", { model: KIMI })
+  const members = memberSet([coder])
+  const sessions = [
+    child("c-1", "coder", 1_000, { title: "Inspect modules" }),
+    child("c-2", "coder", 2_000, { title: "Audit", model: GROK }),
+  ]
+  const view = panel(a10Sources(sessions, [coder], ["c-1", "c-2"], {}, members), "root", 35, BODY_MAX_LINES, 0)
+
+  assert.equal(view.rows[0].head, " 1.coder     Go/Kimi K3.1 Pro ")
+  assert.equal(view.rows[1].head, " ├ Inspect…" + OMITTED_W35)
+  assert.equal(view.rows[2].head, " └ Audit    Go/Grok 4.7       ")
+  for (const row of view.rows) {
+    assert.equal(cellWidth(row.head), 30)
+    assert.equal(cellWidth(row.head) + BAR_CELLS, 35)
+    assert.equal(row.head.slice(-1), " ")
+  }
+})
+
+test("T13 the role rendering cap is not the comparison operand (C35)", () => {
+  const coder = agent("coder", "coder", { model: { id: "kimi-maxx", providerID: "go" } })
+  const members = memberSet([coder])
+  const run = child("c-1", "coder", 1_000, { title: "Inspect modules" })
+  const view = panel(
+    a10Sources([run], [coder], ["c-1"], { "c-1": [assistant(50, 0, 1_000)] }, members),
+    "root",
+    40,
+    BODY_MAX_LINES,
+    0,
+  )
+
+  // Width 40: the role text clips at 20 cells, the 21-cell resolved label is
+  // still equal to the instance's, so the instance cell is omitted.
+  assert.equal(view.rows[0].head, " 1.coder     Go/Kimi K3.1 Pro Ma…  ")
+  assert.equal(cellWidth(view.rows[0].head), 35)
+  assert.equal(view.rows[1].head, " └ Inspect…" + " ".repeat(24))
+  assert.equal(cellWidth(view.rows[1].head), 35)
+  assert.equal(view.rows[0].filled, 3)
+  assert.equal(view.rows[1].filled, 3)
+})
+
+test("T14 variant-only difference compares equal on the short label", () => {
+  const coder = agent("coder", "coder", { model: { id: "kimi", providerID: "go", variant: "high" } })
+  const members = memberSet([coder])
+  const run = child("c-1", "coder", 1_000, { title: "Inspect modules", model: KIMI })
+  const view = panel(
+    a10Sources([run], [coder], ["c-1"], { "c-1": [assistant(50, 0, 1_000)] }, members),
+    "root",
+    35,
+    BODY_MAX_LINES,
+    0,
+  )
+
+  const full = labeler(GO_MODELS, GO_PROVIDERS)
+  const short = labeler(GO_MODELS, GO_PROVIDERS, true)
+  assert.equal(full({ id: "kimi", providerID: "go", variant: "high" }), "OpenCode Go/Kimi K3.1 Pro (high)")
+  assert.equal(full(KIMI), "OpenCode Go/Kimi K3.1 Pro")
+  assert.notEqual(full({ id: "kimi", providerID: "go", variant: "high" }), full(KIMI))
+  assert.equal(short({ id: "kimi", providerID: "go", variant: "high" }), "Go/Kimi K3.1 Pro")
+  assert.equal(short(KIMI), "Go/Kimi K3.1 Pro")
+
+  assert.equal(view.rows[0].head, " 1.coder     Go/Kimi K3.1 Pro ")
+  assert.equal(view.rows[1].head, " └ Inspect…" + OMITTED_W35)
+  assert.equal(view.rows[0].filled, 3)
+  assert.equal(view.rows[1].filled, 3)
+})
+
+test("R9 live filter matches the full model behind the clipped picker title", () => {
+  // 98 cells: the 96-cell display clips after 95 cells, losing the tail.
+  const model = `${"a".repeat(92)}TAILZZ`
+  const row: RunningSubagent = {
+    sessionID: "ses_tail",
+    agent: "explore",
+    model,
+    title: "Inspect repo",
+    since: 1_000,
+  }
+  const title = pickerTitle(row.agent, row.model)
+  const shownModel = title.split(" · ")[1]
+  assert.equal(cellWidth(shownModel), PICKER_MODEL_CELLS)
+  assert.equal(shownModel, `${"a".repeat(92)}TAI…`)
+  assert.equal(title.includes("TAILZZ"), false)
+
+  // Fits: a term only in the clipped-away tail still finds the raw record.
+  assert.equal(filterRows([row], "tailzz").length, 1)
+  // Does not fit: a term in neither the full fields nor the clipped display.
+  assert.equal(filterRows([row], "zzzz").length, 0)
+  assert.equal(title.toLowerCase().includes("zzzz"), false)
 })
