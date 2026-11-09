@@ -707,9 +707,10 @@ function roleHead(
 }
 
 /**
- * Instance row text: indent, title, and the model column. An undefined model
- * (A.10 says the label is omitted) fills the column with spaces, keeping the
- * column width and the separator in place (C36).
+ * Instance row text: indent, title, and the model column. When A.10 omits the
+ * model label (C35), the title absorbs the title field, its gap, and the model
+ * field: `B = rest + INSTANCE_TITLE_GAP_CELLS = W − 9` on both paths (A.13,
+ * C36). The separator and the boxes keep their columns; no model field exists.
  */
 function instanceHead(
   glyph: "├" | "└",
@@ -718,12 +719,15 @@ function instanceHead(
   width: number,
   dynamic: boolean,
 ): string {
+  const clean = cleanTitle(title)
+  if (model === undefined) {
+    const budget = effectiveWidth(width) - INSTANCE_REST_FIXED_CELLS + INSTANCE_TITLE_GAP_CELLS
+    const absorbed = padCells(clip(clean, budget), budget)
+    return ` ${glyph} ${absorbed}${" ".repeat(INSTANCE_BAR_GAP_CELLS)}`
+  }
   const fields = instanceSplit(width, dynamic)
-  const shownTitle = padCells(clip(cleanTitle(title), fields.leading), fields.leading)
-  const modelField =
-    model === undefined
-      ? " ".repeat(fields.model)
-      : padCells(fitModel(model, Math.min(fields.model, INSTANCE_MODEL_CELLS)), fields.model)
+  const shownTitle = padCells(clip(clean, fields.leading), fields.leading)
+  const modelField = padCells(fitModel(model, Math.min(fields.model, INSTANCE_MODEL_CELLS)), fields.model)
   return ` ${glyph} ${shownTitle}${" ".repeat(INSTANCE_TITLE_GAP_CELLS)}${modelField}${" ".repeat(INSTANCE_BAR_GAP_CELLS)}`
 }
 

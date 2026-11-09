@@ -625,7 +625,13 @@ test("C11 INSTANCE_TITLE_CELLS = 8 clips title text", () => {
   assert.equal(clip("调研团队组", 8), "调研团…")
 
   const role = runningRole("aa", "Alpha", 1, 100)
-  const session = { ...role.sessions[0], title: "abcdefghi" }
+  const session = {
+    ...role.sessions[0],
+    title: "abcdefghi",
+    // A.10 shows the label because the role has no model, so C11's 8-cell
+    // shown-row cap applies (A.13 scopes it to shown-model rows).
+    model: { id: "deepseek-flash", providerID: "deepseek" },
+  }
   const view = panel(rootSources([session], [role.agent], role.running), "root", 35, BODY_MAX_LINES, 0)
   assert.equal(view.rows[1].head.slice(3, 11), "abcdefg…")
 })
@@ -633,7 +639,12 @@ test("C11 INSTANCE_TITLE_CELLS = 8 clips title text", () => {
 test("C12 INSTANCE_TITLE_GAP_CELLS = 1 after the title field", () => {
   assert.equal(INSTANCE_TITLE_GAP_CELLS, 1)
   const role = runningRole("aa", "Alpha", 1, 100)
-  const session = { ...role.sessions[0], title: "abcdefghi" }
+  const session = {
+    ...role.sessions[0],
+    title: "abcdefghi",
+    // Shown-model row: the gap column follows the 8-cell title field (C12).
+    model: { id: "deepseek-flash", providerID: "deepseek" },
+  }
   const view = panel(rootSources([session], [role.agent], role.running), "root", 35, BODY_MAX_LINES, 0)
   assert.equal(view.rows[1].head[11], " ")
   assert.equal(view.rows[1].head.slice(3, 11), "abcdefg…")
@@ -2061,8 +2072,14 @@ function a10Sources(
   }
 }
 
-/** Omitted at width 35: title gap 1 + 17-cell model column + separator 1. */
-const OMITTED_W35 = " ".repeat(19)
+/**
+ * A.13/C36: an omitted-model instance head — indent, title padded to the
+ * absorption budget `B = W − 9`, then the separator.
+ */
+function absorbedHead(text: string, width = DEFAULT_WIDTH, glyph: "├" | "└" = "└"): string {
+  const budget = width - INSTANCE_REST_FIXED_CELLS + INSTANCE_TITLE_GAP_CELLS
+  return ` ${glyph} ${text}${" ".repeat(budget - cellWidth(text))} `
+}
 
 test("T6 equal member models omit the instance model cell (C35)", () => {
   const coder = agent("coder", "coder", { model: KIMI })
@@ -2077,7 +2094,7 @@ test("T6 equal member models omit the instance model cell (C35)", () => {
   )
 
   assert.equal(view.rows[0].head, " 1.coder     Go/Kimi K3.1 Pro ")
-  assert.equal(view.rows[1].head, " └ Inspect…" + OMITTED_W35)
+  assert.equal(view.rows[1].head, absorbedHead("Inspect modules"))
   assert.equal(cellWidth(view.rows[1].head), 30)
   assert.equal(view.rows[0].filled, 3)
   assert.equal(view.rows[1].filled, 3)
@@ -2130,7 +2147,7 @@ test("T9 unknown == unknown is omitted; the asymmetric twin shows (C35, F29)", (
 
   const equal = panel(a10Sources([run], [coder], ["c-1"], {}, members), "root", 35, BODY_MAX_LINES, 0)
   assert.equal(equal.rows[0].head, " 1.coder" + " ".repeat(22))
-  assert.equal(equal.rows[1].head, " └ Inspect…" + OMITTED_W35)
+  assert.equal(equal.rows[1].head, absorbedHead("Inspect modules"))
 
   // Known snapshot baseline, live definition and session both without a model.
   const known = agent("coder", "coder", { model: KIMI })
@@ -2164,26 +2181,26 @@ test("T10 an instance that resolves shows; churn re-evaluates every pass", () =>
     BODY_MAX_LINES,
     0,
   )
-  assert.equal(after.rows[1].head, " └ Inspect…" + OMITTED_W35)
+  assert.equal(after.rows[1].head, absorbedHead("Inspect modules"))
   assert.equal(after.rows[1].state, "active")
   assert.equal(after.rows[1].tps, undefined)
 })
 
-test("T11 width pressure keeps the filler slot and the separator (C36)", () => {
+test("T11 width pressure on the absorbed title (C36)", () => {
   const coder = agent("coder", "coder", { model: KIMI })
   const members = memberSet([coder])
   const run = child("c-1", "coder", 1_000, { title: "Inspect modules" })
 
   const at29 = panel(a10Sources([run], [coder], ["c-1"], {}, members), "root", 29, BODY_MAX_LINES, 0)
-  assert.equal(at29.rows[1].head, " └ Inspect…             ")
+  assert.equal(at29.rows[1].head, absorbedHead("Inspect modules", 29))
   assert.equal(cellWidth(at29.rows[1].head), 24)
 
   const at19 = panel(a10Sources([run], [coder], ["c-1"], {}, members), "root", 19, BODY_MAX_LINES, 0)
-  assert.equal(at19.rows[1].head, " └ Inspect…   ")
+  assert.equal(at19.rows[1].head, absorbedHead("Inspect m…", 19))
   assert.equal(cellWidth(at19.rows[1].head), 14)
   assert.equal(
     at19.rows[1].head + BAR_GLYPH_EMPTY.repeat(BAR_CELLS - at19.rows[1].filled),
-    " └ Inspect…   ░░░░░",
+    " └ Inspect m… ░░░░░",
   )
 
   // Shown at width 19: same geometry, different content.
@@ -2203,7 +2220,7 @@ test("T12 mixed rows keep every bar in the last five columns", () => {
   const view = panel(a10Sources(sessions, [coder], ["c-1", "c-2"], {}, members), "root", 35, BODY_MAX_LINES, 0)
 
   assert.equal(view.rows[0].head, " 1.coder     Go/Kimi K3.1 Pro ")
-  assert.equal(view.rows[1].head, " ├ Inspect…" + OMITTED_W35)
+  assert.equal(view.rows[1].head, absorbedHead("Inspect modules", DEFAULT_WIDTH, "├"))
   assert.equal(view.rows[2].head, " └ Audit    Go/Grok 4.7       ")
   for (const row of view.rows) {
     assert.equal(cellWidth(row.head), 30)
@@ -2228,7 +2245,7 @@ test("T13 the role rendering cap is not the comparison operand (C35)", () => {
   // still equal to the instance's, so the instance cell is omitted.
   assert.equal(view.rows[0].head, " 1.coder     Go/Kimi K3.1 Pro Ma…  ")
   assert.equal(cellWidth(view.rows[0].head), 35)
-  assert.equal(view.rows[1].head, " └ Inspect…" + " ".repeat(24))
+  assert.equal(view.rows[1].head, absorbedHead("Inspect modules", 40))
   assert.equal(cellWidth(view.rows[1].head), 35)
   assert.equal(view.rows[0].filled, 3)
   assert.equal(view.rows[1].filled, 3)
@@ -2255,9 +2272,156 @@ test("T14 variant-only difference compares equal on the short label", () => {
   assert.equal(short(KIMI), "Go/Kimi K3.1 Pro")
 
   assert.equal(view.rows[0].head, " 1.coder     Go/Kimi K3.1 Pro ")
-  assert.equal(view.rows[1].head, " └ Inspect…" + OMITTED_W35)
+  assert.equal(view.rows[1].head, absorbedHead("Inspect modules"))
   assert.equal(view.rows[0].filled, 3)
   assert.equal(view.rows[1].filled, 3)
+})
+
+test("T26 absorption on a member row is path-invariant (A.13, C36)", () => {
+  const coder = agent("coder", "coder", { model: KIMI })
+  const members = memberSet([coder])
+  const run = child("c-1", "coder", 1_000, { title: "Inspect modules" })
+  const sources = a10Sources([run], [coder], ["c-1"], { "c-1": [assistant(50, 0, 1_000)] }, members)
+
+  const fallback = panel(sources, "root", 35, BODY_MAX_LINES, 0)
+  const dynamic = dynamicPanel(sources, "root", 35)
+
+  // Equal labels → omitted; both paths use the same absorbed budget B = 26.
+  assert.equal(fallback.rows[1].head, " └ Inspect modules            ")
+  assert.equal(dynamic.rows[1].head, " └ Inspect modules            ")
+  assert.equal(fallback.rows[1].head, absorbedHead("Inspect modules"))
+  assert.equal(cellWidth(fallback.rows[1].head), 30)
+  assert.equal(cellWidth(dynamic.rows[1].head), 30)
+  assert.equal(fallback.rows[1].head.slice(-1), " ")
+  assert.equal(fallback.rows[1].filled, 3)
+  assert.equal(dynamic.rows[1].filled, 3)
+
+  // Role rows keep their own path (A.11, unchanged by A.13).
+  assert.equal(fallback.rows[0].head, " 1.coder     Go/Kimi K3.1 Pro ")
+  assert.equal(dynamic.rows[0].head, " 1.coder      Go/Kimi K3.1 P… ")
+})
+
+test("T27 absorption on a temporary built-in row; the tag is not the operand", () => {
+  const general = agent("general", "general", { model: GROK })
+  const coder = agent("coder", "coder")
+  const members = memberSet([coder])
+  const run = child("g-1", "general", 1_000, { title: "Inspect modules" })
+  const sources = a10Sources([run], [general, coder], ["g-1"], {}, members)
+
+  const fallback = panel(sources, "root", 35, BODY_MAX_LINES, 0)
+  const dynamic = dynamicPanel(sources, "root", 35)
+
+  assert.equal(fallback.rows[0].head, " 1.general   [built-in]       ")
+  assert.equal(dynamic.rows[0].head, " 1.general    [built-in]      ")
+  assert.equal(fallback.rows[1].head, " └ Inspect modules            ")
+  assert.equal(dynamic.rows[1].head, " └ Inspect modules            ")
+  assert.equal(fallback.rows[1].head.includes(BUILTIN_TAG_TEXT), false)
+  assert.equal(cellWidth(fallback.rows[1].head), 30)
+  assert.equal(cellWidth(dynamic.rows[1].head), 30)
+})
+
+test("T28 a short title keeps the old filler string byte for byte", () => {
+  const coder = agent("coder", "coder", { model: KIMI })
+  const members = memberSet([coder])
+  const run = child("c-1", "coder", 1_000, { title: "Audit" })
+  const view = panel(a10Sources([run], [coder], ["c-1"], {}, members), "root", 35, BODY_MAX_LINES, 0)
+
+  // `Audit` is 5 cells, so the absorbed B = 26 pads exactly as the old filler
+  // did: 22 spaces after the title (21 pad + 1 separator).
+  assert.equal(view.rows[1].head, " └ Audit                      ")
+  assert.equal(view.rows[1].head, " └ Audit" + " ".repeat(22))
+  assert.equal(view.rows[1].head, absorbedHead("Audit"))
+  assert.equal(cellWidth(view.rows[1].head), 30)
+})
+
+test("T29 shown-model rows are byte-for-byte unchanged (A.13 regression)", () => {
+  const coder = agent("coder", "coder", { model: KIMI })
+  const members = memberSet([coder])
+  const run = child("c-1", "coder", 1_000, { title: "Inspect modules", model: GROK })
+  const sources = a10Sources([run], [coder], ["c-1"], {}, members)
+
+  const fallback = panel(sources, "root", 35, BODY_MAX_LINES, 0)
+  const dynamic = dynamicPanel(sources, "root", 35)
+
+  assert.equal(fallback.rows[1].head, " └ Inspect… Go/Grok 4.7       ")
+  assert.equal(dynamic.rows[1].head, " └ Inspect… Go/Grok 4.7       ")
+  assert.equal(fallback.rows[1].head, dynamic.rows[1].head)
+  // Still the C11 8-cell title field, not the absorbed budget.
+  assert.equal(fallback.rows[1].head.slice(3, 11), "Inspect…")
+
+  // The built-in-instance twin also keeps the shown layout (C34).
+  const explore = agent("explore", "explore")
+  const own = child("e-1", "explore", 1_000, { title: "Inspect modules", model: GROK })
+  const builtin = a10Sources([own], [explore], ["e-1"], {}, memberSet([explore]))
+  assert.equal(panel(builtin, "root", 35, BODY_MAX_LINES, 0).rows[1].head, " └ Inspect… Go/Grok 4.7       ")
+})
+
+test("T30 width pressure and the fallback-takeover edge (C36, C49)", () => {
+  const coder = agent("coder", "coder", { model: KIMI })
+  const members = memberSet([coder])
+
+  const at = (width: number) => {
+    const run = child("c-1", "coder", 1_000, { title: "Inspect modules" })
+    const sources = a10Sources([run], [coder], ["c-1"], {}, members)
+    return {
+      fallback: panel(sources, "root", width, BODY_MAX_LINES, 0).rows[1].head,
+      dynamic: dynamicPanel(sources, "root", width).rows[1].head,
+    }
+  }
+
+  // Omitted rows are path-invariant at every width.
+  const cases: Array<[number, string]> = [
+    [30, absorbedHead("Inspect modules", 30)],
+    [29, absorbedHead("Inspect modules", 29)],
+    [28, absorbedHead("Inspect modules", 28)],
+    [24, absorbedHead("Inspect modules", 24)],
+    [23, absorbedHead("Inspect modul…", 23)],
+    [19, absorbedHead("Inspect m…", 19)],
+  ]
+  for (const [width, expected] of cases) {
+    const rows = at(width)
+    assert.equal(rows.fallback, expected, `fallback at W ${width}`)
+    assert.equal(rows.dynamic, expected, `dynamic at W ${width}`)
+    assert.equal(rows.fallback, rows.dynamic)
+    assert.equal(cellWidth(rows.fallback), width - BAR_CELLS)
+    assert.equal(rows.fallback.slice(-1), " ")
+  }
+
+  // The pinned design strings: W 24 fits whole, W 23 clips one cell over.
+  assert.equal(at(24).fallback, " └ Inspect modules ")
+  assert.equal(at(23).fallback, " └ Inspect modul… ")
+  assert.equal(at(19).fallback, " └ Inspect m… ")
+})
+
+test("T31 long-title clip boundary at W 35 (C36)", () => {
+  const coder = agent("coder", "coder", { model: KIMI })
+  const members = memberSet([coder])
+
+  const at = (title: string) => {
+    const run = child("c-1", "coder", 1_000, { title })
+    return panel(a10Sources([run], [coder], ["c-1"], {}, members), "root", 35, BODY_MAX_LINES, 0).rows[1].head
+  }
+
+  // 16 cells fit B = 26 whole.
+  assert.equal(at("Inspect modules!"), absorbedHead("Inspect modules!"))
+  assert.equal(at("Inspect modules!"), " └ Inspect modules!           ")
+  // Exactly B = 26 fits whole: no ellipsis.
+  assert.equal(at("Inspect modules and audits"), absorbedHead("Inspect modules and audits"))
+  assert.equal(at("Inspect modules and audits"), " └ Inspect modules and audits ")
+  // B + 1 = 27 clips to the 25-cell prefix plus `…`.
+  assert.equal(clip("Inspect modules and auditsX", 26), "Inspect modules and audit…")
+  assert.equal(at("Inspect modules and auditsX"), absorbedHead("Inspect modules and audit…"))
+  // A longer title clips to the same 26-cell string.
+  assert.equal(at("Inspect modules and audit logs"), absorbedHead("Inspect modules and audit…"))
+  for (const head of [
+    at("Inspect modules!"),
+    at("Inspect modules and audits"),
+    at("Inspect modules and auditsX"),
+    at("Inspect modules and audit logs"),
+  ]) {
+    assert.equal(cellWidth(head), 30)
+    assert.equal(head.slice(-1), " ")
+  }
 })
 
 test("R9 live filter matches the full model behind the clipped picker title", () => {

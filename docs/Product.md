@@ -75,7 +75,13 @@ currently viewed (other tabs' sessions are invisible here).
   resolved model, or when the instance's model is unknown. When the labels
   agree, the model cell is omitted. How the row lays out when the field is
   absent is a design decision; the comparison itself is done on the
-  resolved labels before any clipping.
+  resolved labels before any clipping. When the model cell is omitted
+  (human decision A.13), the title field absorbs the omitted cell's space:
+  both row paths let the title text budget extend over the title field,
+  its gap, and the model field — the whole space between the indent and
+  the separator — and the title clips with `…` only beyond that budget (no
+  8-cell cap applies to an omitted-model row). A shown model keeps the
+  A.11 layout unchanged; role rows are unaffected by A.13.
 - Colour: same rule as the working role row.
 - A succeeded instance disappears immediately: its row collapses back into
   the role row. A failed or interrupted instance does not — it follows
