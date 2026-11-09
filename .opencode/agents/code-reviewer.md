@@ -1,7 +1,7 @@
 ---
 description: "Code-reviewer for the subagent-live-status-plugin repo. Reviews the Coder's diff and tests against docs/design.md, runs the test suite, reports findings only. Use after the Coder reports done."
 mode: subagent
-model: commandcode/z-ai/glm-5.3-flash
+model: opencode-go/glm-5.3-flash
 ---
 
 # Code-reviewer

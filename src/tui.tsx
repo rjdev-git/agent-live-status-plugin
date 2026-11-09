@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync } from "node:fs"
 import { dirname } from "node:path"
 import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
-import { usePanel } from "@opencode/plugin/gui"
+import type { PanelFrame } from "@opencode/plugin/gui"
 import type { ResolvedTheme } from "@opencode/theme/tui"
 import { parseColor, type RGBA, type TextRenderable } from "@opentui/core"
 import type { JSX } from "@opentui/solid"
@@ -321,18 +321,20 @@ function FullPanel(props: {
   state: GoodState
   lastAccepted: () => number | undefined
   accept: (next?: number) => void
+  frameOf?: () => PanelFrame
 }) {
   const [beat, setBeat] = createSignal(0)
 
   // §1.4: a slot outside `Panel.render` throws here; detection then degrades to
-  // the configured-width path instead of the R11 toast (F34).
-  const frame = (() => {
+  // the configured-width path instead of the R11 toast (F34). The cached
+  // accessor is called per pass, never at setup: `usePanel()` needs a render.
+  const resolveFrame = (): PanelFrame | undefined => {
     try {
-      return usePanel()
+      return props.frameOf?.()
     } catch {
       return undefined
     }
-  })()
+  }
 
   // §1.4: one layout handle, never a width value.
   let panelNode: TextRenderable | undefined
@@ -360,6 +362,7 @@ function FullPanel(props: {
     try {
       // §1.4: the accessors are read inside this memo, so `sidebar.width()` is
       // tracked and a resize re-runs the pass. The value is never snapshotted.
+      const frame = resolveFrame()
       const probe: WidthProbe | undefined = (() => {
         if (!frame) return undefined
         try {
@@ -553,6 +556,7 @@ function Status(props: {
   cellPx: () => number
   members: () => MemberSet | undefined
   debug?: string
+  frameOf?: () => PanelFrame
 }) {
   // §1.4 / C53: one adopted-width record per activation, held here so a compact
   // swap (FullPanel unmount) does not reset the dampener.
@@ -590,6 +594,7 @@ function Status(props: {
         accept={(next) => {
           lastAccepted = next
         }}
+        frameOf={props.frameOf}
       />
     </Show>
   )
@@ -661,7 +666,19 @@ async function showDetails(context: Context, query?: string) {
 
 export default Plugin.define({
   id: "subagent-live-status-plugin.tui",
-  setup(context) {
+  async setup(context) {
+    // §1.4 (F38): the TUI loader forbids static gui submodule imports — one
+    // fails the whole plugin. Resolve the accessor per activation; any failure
+    // (loader rejection, unshipped module, wrong shape) caches undefined and
+    // the probe degrades silently to rung-1-only. Cache the function, not a
+    // frame: `usePanel()` throws outside `Panel.render`.
+    let frameOf: (() => PanelFrame) | undefined
+    try {
+      const gui = await import("@opencode/plugin/gui")
+      frameOf = typeof gui.usePanel === "function" ? gui.usePanel : undefined
+    } catch {
+      frameOf = undefined
+    }
     const options = readOptions(context)
     debugEnabled = options.debug !== undefined
     // Temporary diagnostic: the agent ids the host reports, dumped once.
@@ -736,6 +753,7 @@ export default Plugin.define({
         cellPx={() => options.cellPx}
         members={members}
         debug={options.debug}
+        frameOf={frameOf}
       />
     ))
 

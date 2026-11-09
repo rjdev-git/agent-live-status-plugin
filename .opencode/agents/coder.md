@@ -1,7 +1,7 @@
 ---
 description: "Coder for the subagent-live-status-plugin repo. Implements docs/design.md into src/ with unit tests. Use when the design document changes or a finding must be fixed in code."
 mode: subagent
-model: commandcode/deepseek/deepseek-v4.1-flash-fast
+model: opencode-go/deepseek-v4.1-flash
 ---
 
 # Coder

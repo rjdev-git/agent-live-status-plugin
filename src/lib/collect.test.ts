@@ -2647,8 +2647,9 @@ test("T21 a live width change rebuilds rows and nothing else", () => {
 test("T22 every unavailable probe yields the configured-width fallback (C46)", () => {
   const agents = [memberRole("coder", "explore")]
   const sources = goSources([], agents)
-  // The TUI read point is a component-body `usePanel()` plus accessor reads
-  // inside the guarded memo (§1.4); these probes are what it passes on.
+  // The TUI resolves `usePanel` once at setup and invokes that accessor per
+  // pass through `resolveFrame()` inside the guarded memo (§1.4); these probes
+  // are what it passes on.
   const unavailable: Array<WidthProbe | undefined> = [
     undefined,
     { ...SIDE_PROBE, loaded: false },

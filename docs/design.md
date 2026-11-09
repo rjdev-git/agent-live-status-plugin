@@ -293,7 +293,8 @@ separator cell, so `head` is `W − 5` cells and ends with that space.
   rung does; the floor `MIN_ROW_CELLS = 19` applies in both paths.
   Detection is unavailable when the ladder cannot run at all: the panel is
   not in the side region, the region is not visible or the sidebar is closed,
-  the stored width has not loaded (`transition() === false`), or every width
+  the stored width has not loaded (`transition() === false`), the gui module
+  could not be resolved at runtime (F38), or every width
   read is not a finite positive number. Individual rungs also skip without
   failing the ladder: an ambiguous layout read skips rung 1, an absent
   terminal pixel resolution skips rung 2, and the next rung decides.
@@ -900,6 +901,26 @@ the rung 2/3 input:
   the calibration knob for that drift. No padding constant exists (F35,
   settled).
 
+**Host constraint — no static gui submodule import (F38, post-ship A.12).**
+The TUI plugin loader provides only the host's `effect` and
+`@opencode/plugin` modules. A static submodule import fails the **whole
+plugin** at load with, verbatim:
+
+```
+Error: Cannot load "@opencode/plugin/dist/gui/index.js" from plugin node_modules: "@opencode/plugin/dist/gui/index.js" is not provided by OpenCode; plugins must use the host's "effect" and "@opencode/plugin" modules.
+```
+
+`src/tui.tsx` therefore never statically imports `@opencode/plugin/gui` (or
+any `dist/gui` path). The module is resolved at runtime with a dynamic
+`import("@opencode/plugin/gui")` inside the plugin setup's `try`, and the
+accessor is cached for that activation; any failure — loader rejection, the
+module not being shipped, or anything else — caches `undefined`. `usePanel()`
+itself still runs inside the panel render, because the SDK throws outside a
+`Panel.render`. An unavailable probe is treated exactly like the existing
+unavailable list: silent, no toast. Rungs 2 and 3 then have no pixel source,
+`rowWidth` receives no probe and runs rung-1-only semantics, and the
+configured width governs whenever rung 1 cannot read.
+
 **SDK surface — renderer** (`node_modules/@opencode/plugin/dist/tui/context.d.ts:483`,
 `@opentui/core/renderer.d.ts`), the rung 1/2 input. `context.renderer` is a
 `CliRenderer`:
@@ -1021,7 +1042,8 @@ affects a panel whose terminal reports its pixel resolution. It stays a manual
 brake and a test override for terminals that report none — that is the whole
 of its contract.
 
-**Probe (pure).** The TUI reads the host accessors into plain objects, so the
+**Probe (pure).** The TUI resolves the gui module at runtime (dynamic import at
+setup, F38) and reads the host accessors into plain objects, so the
 ladder and its rounding are testable without the SDK:
 
 ```ts
@@ -1135,13 +1157,25 @@ clipped at `M = 9` (W = 25). Detection edges: W is the minimum of `declared`
 and `detected`, then floored at 19; `detected` is whichever rung produced it,
 and the table keys off `W` alone, so no row value changes with the rung.
 
-**Where it is read (TUI).** `src/tui.tsx` sits in SolidJS. The panel render
-component resolves the frame once in its body, and the **inner full-mode
+**Where it is read (TUI).** `src/tui.tsx` sits in SolidJS. Plugin setup
+resolves the gui module's `usePanel` accessor once per activation with a
+dynamic import (never a static one, F38), the panel render component calls it
+once in its body, and the **inner full-mode
 component** owns the layout handles, captures the panel node by `ref`, and
 reads the probe plus the renderer readings **inside the same `guarded` memo
 that builds the view**, so the width stays reactive:
 
 ```ts
+// Amended since A.12 (F38): no static gui submodule import — the loader fails
+// the whole plugin. Resolve the accessor per activation; any failure caches
+// undefined and the probe degrades silently to rung-1-only (§1.4).
+let frameOf: (() => PanelFrame) | undefined
+try {
+  frameOf = (await import("@opencode/plugin/gui")).usePanel
+} catch {
+  frameOf = undefined              // loader rejection, unshipped module, throw
+}
+
 // Status owns the C53 record for the whole activation and renders
 // <Show when={!compact()} fallback={compactLine}><FullPanel .../></Show>;
 // FullPanel unmounts when compact wins, so its cleanup is the detach signal.
@@ -1159,8 +1193,9 @@ function FullPanel(props: { context: Context; bump: () => void;
   onCleanup(() => { panelNode = undefined })   // subtree unmount: no phantom reads
 
   // inside the guarded memo, next to sources() and panel():
-  // (usePanel is resolved once in this component: a slot outside Panel.render throws)
-  const frame = (() => { try { return usePanel() } catch { return undefined } })()
+  // The module is the one resolved at setup; usePanel() still runs here because
+  // it throws outside Panel.render. No static import (F38).
+  const frame = (() => { try { return frameOf?.() } catch { return undefined } })()
   const probe: WidthProbe | undefined = frame && {
     placement: frame.placement(), visible: frame.visible(),
     opened: frame.sidebar.opened(), loaded: frame.sidebar.transition(),
@@ -1215,7 +1250,9 @@ ladder itself produced (below). There is no polling:
   `prompt.footer`; a destroyed renderer; a detached renderable) degrades to
   `probe`/`metrics` `undefined` and the next rung or the configured-width path
   — not to a toast. Only a genuine build failure reaches the toast, and width
-  fallbacks never dedupe against a toast because they emit none.
+  fallbacks never dedupe against a toast because they emit none. An unresolved
+  gui module (F38) reaches the same path with `frame` undefined; it is not a
+  build failure and emits no toast.
 - **C53 record (not a panel cache).** `lastAccepted` is a single number held
   by the outer panel component for one activation (passed into the inner
   full-mode component), TUI-side, never persisted and
@@ -1264,7 +1301,7 @@ recompute.
 | `context.data.location.model.list(location)` | model id, modelID, providerID, name | model display names only; `limit.context` is no longer read |
 | `context.data.location.provider.list(location)` | provider id, name | provider display names / short label last word |
 | `context.theme` | `text.base`, `text.muted`, `text.feedback.success/warning.base` | title, idle/active/grace text, filled boxes (success), empty boxes (muted) |
-| `usePanel()` frame (`PanelFrame.sidebar`, SDK `gui/solid.d.ts:33-70`) | `placement()`, `visible()`, sidebar `opened()`, `transition()` (stored width loaded), `width()` in CSS px | rung 2/3 probe only (§1.4, A.11, A.12); layout, never row data and never a sync trigger |
+| `usePanel()` frame (`PanelFrame.sidebar`, SDK `gui/solid.d.ts:33-70`; module resolved at runtime, F38) | `placement()`, `visible()`, sidebar `opened()`, `transition()` (stored width loaded), `width()` in CSS px | rung 2/3 probe only (§1.4, A.11, A.12); layout, never row data and never a sync trigger |
 | `context.renderer` (`CliRenderer`) | `root` (layout tree root), `width`/`height` in terminal cells, `resolution` device px or `null`, `"resize"` event | rung 1 layout read (C51) and rung 2 cell calibration (C52), plus the renderer `resize` invalidation (§1.4, A.12); layout only, never row data |
 | `context.storage.store("subagent-live-status-plugin")` | persisted `{ compact }` | R10 |
 | slot input `sessionID` | viewed session id | R3 tab scope; compact count scope |
@@ -1291,8 +1328,8 @@ invalidation owned by the panel component (one per activation, removed on
 cleanup), not a data subscription. `prompt.footer` is not a panel render, so
 its probe is absent and the configured `width` governs (F34). A detection
 failure — an ambiguous layout read, a missing pixel resolution, a detached
-renderable — skips that rung or falls to the configured width, never to the
-R11 toast.
+renderable, an unresolved gui module (F38) — skips that rung or falls to the
+configured width, never to the R11 toast.
 
 Location: the location the TUI is showing (`context.location`, else
 `context.data.location.default()`). The plugin never merges agent definitions
@@ -1582,7 +1619,7 @@ sizes and the text inside them move (§1.1, §1.2, §1.4).
 | C43 | `ROLE_MODEL_MIN_CELLS` | 4 | role model field floor | rest 14 → model 8 | rest 5 → name 2 and model 3 (synthetic: `W >= 19` gives `rest >= 9`, where the model is 5 and the name floor already binds, so this floor is a guard — the C16/C17 precedent) | R5 |
 | C44 | `INSTANCE_TITLE_MIN_CELLS` | 6 | title field floor (proportional path) | rest 14 → title 6 | rest 13 → title 5 → fallback (instance twin of C42) | R5 |
 | C45 | `INSTANCE_MODEL_MIN_CELLS` | 4 | instance model field floor | rest 14 → model 8 | rest 5 → title 2 and model 3 (synthetic, same guard as C43: at `rest 9` the model is 5 and the title floor binds first) | R5 |
-| C46 | width ladder (rung selector) | `selectCells(probe, metrics, cellPxOption)`: shared gates (probe present, `placement === "side"`, `visible`, `opened`, `loaded`) or `undefined`; then rung 1 when `metrics.layoutCells` is finite and `> 0` → `roundHalfUp(layoutCells)`; else rung 2 when `runtimeCellPx(metrics)` is defined (C52) **and** `cssWidth` finite `> 0` → `roundHalfUp(cssWidth / runtimeCellPx)`; else rung 3 when `cssWidth` finite `> 0` → `roundHalfUp(cssWidth / resolveCellPx(cellPxOption))`; else `undefined`. First succeeding rung wins; ties round **up**. The option is read by rung 3 only | detected width in cells and the rung that produced it | rung 1: `{layoutCells 40}` → `cells 40, rung 1`; rung 2: `{resolutionWidth 1600, rendererColumns 200, cssWidth 280}` → `cells 35, rung 2`; rung 3: `{cssWidth 280}` with the option 8 → `cells 35, rung 3`; `{cssWidth 260}` → `cells 33` (32.5 rounds up) | all three present (`layoutCells 40`, resolution 1600/200, `cssWidth 280`) → `cells 40, rung 1`, never rung 2's 35; `{resolutionWidth 1600, rendererColumns 0, cssWidth 280}` → rung 2 skipped, rung 3 → `cells 35` (a divide-by-zero rung 2 yields `Infinity`/`NaN` and fails); `transition() === false`, `opened() === false`, `visible() === false`, `placement === "mobile"`, `cssWidth 0`, `cssWidth NaN`, or no probe → `undefined`, `dynamic = false` even when `layoutCells` is present | R5 |
+| C46 | width ladder (rung selector) | `selectCells(probe, metrics, cellPxOption)`: shared gates (probe present, `placement === "side"`, `visible`, `opened`, `loaded`) or `undefined`; then rung 1 when `metrics.layoutCells` is finite and `> 0` → `roundHalfUp(layoutCells)`; else rung 2 when `runtimeCellPx(metrics)` is defined (C52) **and** `cssWidth` finite `> 0` → `roundHalfUp(cssWidth / runtimeCellPx)`; else rung 3 when `cssWidth` finite `> 0` → `roundHalfUp(cssWidth / resolveCellPx(cellPxOption))`; else `undefined`. First succeeding rung wins; ties round **up**. The option is read by rung 3 only | detected width in cells and the rung that produced it | rung 1: `{layoutCells 40}` → `cells 40, rung 1`; rung 2: `{resolutionWidth 1600, rendererColumns 200, cssWidth 280}` → `cells 35, rung 2`; rung 3: `{cssWidth 280}` with the option 8 → `cells 35, rung 3`; `{cssWidth 260}` → `cells 33` (32.5 rounds up) | all three present (`layoutCells 40`, resolution 1600/200, `cssWidth 280`) → `cells 40, rung 1`, never rung 2's 35; `{resolutionWidth 1600, rendererColumns 0, cssWidth 280}` → rung 2 skipped, rung 3 → `cells 35` (a divide-by-zero rung 2 yields `Infinity`/`NaN` and fails); `transition() === false`, `opened() === false`, `visible() === false`, `placement === "mobile"`, `cssWidth 0`, `cssWidth NaN`, or no probe (including a gui module unavailable at runtime, F38) → `undefined`, `dynamic = false` even when `layoutCells` is present | R5 |
 | C47 | `rowWidth` rule (with C53) | `declared = max(MIN_ROW_CELLS, width ?? DEFAULT_WIDTH)`; `detected = selectCells(probe, metrics, cellPx)` (C46); rung-1 win → `W = clamp(detected.cells)`, `accepted = W`; else C53 stable box → `W = clamp(lastAccepted)`, `accepted = lastAccepted`, `rung 1`; else `W = detected === undefined ? declared : clamp(detected.cells)`, `accepted = undefined`; `clamp(x) = max(MIN_ROW_CELLS, min(declared, x))`. `lastAccepted` is C53's record; the rung changes no arithmetic | effective width and the next `lastAccepted` | declared 35, detected 50 → W 35 (cap); declared 35, detected 28 → W 28; declared 18 → 19; declared 40, detection 50 → `W 40, accepted 40` | declared 35, detected 12 → W 19 (floor, not 12); detected undefined and no stable box → 35; any rung-2/3 outcome returns `accepted undefined` | R5 |
 | C48 | role split rule (A.11) | `rest = W − C38`; `N = roundHalfUp(rest × 2/5)`; `M = rest − N`; `dynamic && N >= 6 && M >= 4` → `N`/`M`, else the pre-A.11 `9 / (W − 19)` | role field sizes and the name text budget | W 35 dynamic → 10/15 → `" 1.explore    Go/Kimi K3.1 P… "` (30 cells); W 50 dynamic → 16/24 → `" 1.explore          Go/Kimi K3.1 Pro        "` (45 cells) | W 35 fallback → 9/16 → `" 1.explore   Go/Kimi K3.1 Pro "` (30 cells) at the same W; W 23 dynamic → floor → 9/4 → `" 1.designer  …/K… "` (18 cells) | R5 |
 | C49 | instance split rule (A.11) | `rest = W − C39`; `share = roundHalfUp(rest × 2/5)`; `T = min(share, INSTANCE_TITLE_CELLS)`; `M = rest − T`; `dynamic && T >= 6 && M >= 4` → `T`/`M`, else the pre-A.11 `8 / (W − 18)` | title and model field sizes, and the unused-title-cells rule | W 28 dynamic → 7/11 → `" └ Inspec… Go/Grok 4.7 "` (23 cells); W 35 dynamic → 8/17 (identical to fallback); W 24 dynamic → 6/8 | W 28 fallback → 8/10 → `" └ Inspect… Go/Grok 4… "` (23 cells) at the same W; W 23 dynamic → floor → 8/5 | R5 |
@@ -2437,7 +2474,7 @@ settled (human decision A.5); F20 is obsolete at A.6 (human decision).
 F25–F28 are the new points A.8 surfaces; F29–F30 are the new points A.10
 surfaces; F31–F36 are A.11's points, settled by PM arbitration (F31 by the
 Product amendment to R2); F37 is A.12's ladder-units and rung-1-authority
-reading, settled by PM arbitration. F16, F17, F20, F23 and
+reading, settled by PM arbitration; F38 is the post-ship host-module fact. F16, F17, F20, F23 and
 F24 are listed with their source rather than as requests for an answer.
 
 - **F1 (R5 width domain).** R5 gives no lower bound on `width`. Below 19 cells
@@ -2687,6 +2724,12 @@ F24 are listed with their source rather than as requests for an answer.
   two-cycle the pure fall-through rule allowed at the box-equals-rows boundary
   (C51, C53, T24). The C51 accept condition stays strict
   (`A.width > P.width`).
+- **F38 (R5, host module constraint) — runtime fact, post-ship A.12.** The TUI
+  loader rejects static `@opencode/plugin/gui` submodule imports (verbatim in
+  §1.4), so the probe resolves the module dynamically at setup and caches
+  `undefined` on failure; an absent probe is the existing unavailability path
+  (rung 1 only, configured-width fallback, silent). Product's "measurement path
+  unavailable in the host runtime" covers it; the three-rung ladder stands.
 
 ## 9. Revision notes
 
@@ -2946,3 +2989,4 @@ F24 are listed with their source rather than as requests for an answer.
   relabelled, detection paragraph), §5 (A.12 measurement sentence), §6 (intro,
   C37, C46, C47, C51, C52, C53, the A.12 fixture contract, `### A.12`
   scenarios), §7 (G23 closed in code, new G24), §8 (F35 wording, F37).
+  **Post-ship (F38):** TUI loader forbids gui submodule imports; `usePanel` resolves dynamically at setup, probe degrades to rung-1-only.
