@@ -48,6 +48,7 @@ import {
   cleanTitle,
   clip,
   collect,
+  debugDumpPath,
   detectedCells,
   elapsed,
   fitModel,
@@ -2492,6 +2493,28 @@ test("C37 CELL_PX = 8 divides the detected CSS width, half-up", () => {
   // 260 / 8 = 32.5 rounds up; truncating or half-even gives 32.
   assert.equal(detectedCells(probe(260), CELL_PX), 33)
   assert.equal(detectedCells(probe(259), CELL_PX), 32)
+})
+
+test("D1/F40 debug dump path: XDG_STATE_HOME wins, empty is unset, home fallback", () => {
+  const file = "opencode/subagent-model-debug.jsonl"
+  // Set: the state path wins outright, no home segment.
+  assert.equal(debugDumpPath("/state/live", "/home/u"), `/state/live/${file}`)
+  // Unset: the home fallback, never a relative path.
+  assert.equal(debugDumpPath(undefined, "/home/u"), `/home/u/.local/state/${file}`)
+  // Set but empty is unset per the XDG spec, so the home fallback wins.
+  assert.equal(debugDumpPath("", "/home/u"), `/home/u/.local/state/${file}`)
+  // Whitespace-only trims to empty, so it is unset too: no relative path.
+  assert.equal(debugDumpPath("   ", "/home/u"), `/home/u/.local/state/${file}`)
+  // Surrounding spaces are trimmed off the joined value, not kept.
+  assert.equal(debugDumpPath("  /state/padded  ", "/home/u"), `/state/padded/${file}`)
+  // A trailing slash does not double up; an existing file is still one segment.
+  assert.equal(debugDumpPath("/state/live/", "/home/u"), `/state/live/${file}`)
+  // A symlink-looking value is just a string: no canonicalisation, no special case.
+  assert.equal(
+    debugDumpPath("/tmp/opencode/../state", "/home/u"),
+    `/tmp/opencode/../state/${file}`,
+  )
+  assert.equal(debugDumpPath("/tmp/link", "/home/u"), `/tmp/link/${file}`)
 })
 
 test("C38 ROLE_REST_FIXED_CELLS = 10 gives rest W - 10", () => {

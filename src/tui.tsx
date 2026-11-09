@@ -1,4 +1,5 @@
 import { appendFileSync, mkdirSync } from "node:fs"
+import { homedir } from "node:os"
 import { dirname } from "node:path"
 import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
@@ -19,6 +20,7 @@ import {
   barFill,
   barTone,
   collect,
+  debugDumpPath,
   elapsed,
   filterRows,
   isVisibleRole,
@@ -38,8 +40,8 @@ import {
   type WidthProbe,
 } from "./lib/collect"
 
-/** Default path for the temporary debug dump; overridable with `debug: <path>`. */
-const DEBUG_LOG_PATH = "/tmp/opencode/subagent-model-debug.jsonl"
+/** One record per recompute, so the temporary dump stops after this many (D1, F40). */
+const DEBUG_MAX_LINES = 2000
 
 const WATCHED_EVENTS = [
   "session.created",
@@ -86,7 +88,7 @@ function readOptions(context: Context): Options {
     cellPx: resolveCellPx(raw.cellPx),
     debug:
       raw.debug === true
-        ? DEBUG_LOG_PATH
+        ? debugDumpPath(process.env.XDG_STATE_HOME, homedir())
         : typeof raw.debug === "string" && raw.debug.length > 0
           ? raw.debug
           : undefined,
@@ -132,17 +134,24 @@ const syncState = new Map<string, "pending" | "ok" | "failed">()
 /** True only when the diagnostic is on, so the off path writes no debug state. */
 let debugEnabled = false
 
+/** Records written this process, so the dump stops at `DEBUG_MAX_LINES` (D1, F40). */
+let debugLines = 0
+
 /** Last sync failure reported, so one broken host call toasts once. */
 let lastSyncFailure: string | undefined
 
 /**
  * Appends one JSON line to the debug log, creating its directory. A diagnostic
- * write never breaks the panel (R11).
+ * write never breaks the panel (R11). The explicit override keeps the same
+ * 0700 directory / 0600 file modes as the default path, and an existing
+ * directory or file keeps its mode: nothing here chmods.
  */
 function debugLine(path: string, entry: unknown) {
+  if (debugLines >= DEBUG_MAX_LINES) return
   try {
-    mkdirSync(dirname(path), { recursive: true })
-    appendFileSync(path, `${JSON.stringify(entry)}\n`)
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+    appendFileSync(path, `${JSON.stringify(entry)}\n`, { mode: 0o600 })
+    debugLines += 1
   } catch {
     // Silent on purpose: the diagnostic must not surface as a plugin error.
   }
@@ -261,6 +270,14 @@ function readInstances(
   const rows = sessionID ? collect(data, sessionID) : []
   if (debug) debugDump(data, sessionID, debug)
   for (const row of rows) void syncSession(context, row.sessionID, bump)
+  // F40: the guard set keeps only ids the host still lists, so a long-running
+  // TUI does not accumulate dead sessions. Runs after the pass reads the list.
+  for (const id of syncedSessions) {
+    if (data.sessions.get(id) === undefined) {
+      syncedSessions.delete(id)
+      syncState.delete(id)
+    }
+  }
   // `total` is `panel()`'s member-role count, so compact shares the full gate.
   return { data, rows, total: data.members?.roles.length ?? 0 }
 }

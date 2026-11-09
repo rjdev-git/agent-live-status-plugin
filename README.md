@@ -8,7 +8,7 @@ This plugin shows which model each active subagent is using, so you can quickly 
 
 It is especially useful when you use different models for your main agent and subagents and want to confirm that each subagent is using the intended model from its configuration.
 
-Current version: `1.3.0`
+Current version: `1.3.1`
 
 Project renamed to `subagent-live-status-plugin` (was `opencode-subagent-model`); plugin id, storage namespace, and command ids move with it — the persisted compact toggle resets once.
 
@@ -176,9 +176,12 @@ Add the plugin in `opencode.jsonc`:
 
 The `debug` option ships as a diagnostic aid for future investigations:
 `debug: true` enables it and appends a JSONL record per recompute to
-`/tmp/opencode/subagent-model-debug.jsonl`; a string value overrides that
-path. It is off unless enabled, is not part of the requirements contract, and
-is planned for removal once it goes unused.
+`$XDG_STATE_HOME/opencode/subagent-model-debug.jsonl`, or to
+`~/.local/state/opencode/subagent-model-debug.jsonl` when `XDG_STATE_HOME` is
+unset or empty; a string value overrides that path. The directory is created
+`0700` and the file `0600`, and the dump stops after 2000 records per run. It
+is off unless enabled, is not part of the requirements contract, and is
+planned for removal once it goes unused.
 
 ## Installation
 

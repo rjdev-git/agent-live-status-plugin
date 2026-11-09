@@ -487,6 +487,21 @@ export function resolveCellPx(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : CELL_PX
 }
 
+/**
+ * D1: default path for the temporary debug dump. An `XDG_STATE_HOME` that is
+ * set and trims to non-empty wins (the XDG spec treats an empty value as
+ * unset, so whitespace-only is unset too); the `~/.local/state` fallback
+ * applies otherwise. The trimmed value is joined, so surrounding spaces never
+ * reach the path. Plain concatenation keeps this module free of node imports,
+ * and the value is used as given otherwise: no canonicalisation, no symlink
+ * handling.
+ */
+export function debugDumpPath(xdgStateHome: string | undefined, home: string): string {
+  const trimmed = xdgStateHome?.trim()
+  const base = trimmed !== undefined && trimmed.length > 0 ? trimmed : `${home}/.local/state`
+  return `${base.replace(/\/+$/, "")}/opencode/subagent-model-debug.jsonl`
+}
+
 /** Non-negative half-up rounding: `floor(x + 1/2)` (C40, C41, C46). */
 function roundHalfUp(value: number): number {
   return Math.floor(value + 0.5)

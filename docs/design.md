@@ -1520,6 +1520,18 @@ collects:
   trigger the design relies on (G16).
 - Both re-sync paths bypass the once-per-session `syncedSessions` guard: that
   guard exists to stop repeated session loads, not to stop message refreshes.
+- The guard set is pruned, not left to grow for the process life (F40). After
+  each `readInstances` pass, drop every id the host no longer lists
+  (`context.data.session.get(id) === undefined`), so a long-running TUI keeps
+  only live sessions. Pruning runs after the pass reads the list, so a session
+  that just appeared is never dropped. This changes no sync semantics: a
+  running or grace session stays listed, so it stays in the set and syncs
+  once; a duplicate sync is still harmless, but it must not become the norm.
+  The prune is a host-backed read folded into the existing `src/tui.tsx` pass,
+  not a pure-layer rule (R12).
+- **Boundary fixtures (out of contract):** listed session → kept in the set;
+  absent session (`get` returns `undefined`) → dropped; grace-stage session
+  still listed → kept. Off-path and contract fixtures are unchanged.
 - The sync is a host call with a side effect and lives in `src/tui.tsx`, not
   in the pure layer (R12); no cache entry is invalidated by hand.
 - Sync failure is not a panel failure: it follows R11 (toast, last good view),
@@ -2663,14 +2675,51 @@ traceability, not as a task.
   A.10 comparison, `FILL_BANDS`, glyphs, tones, and G16's sync gate.
 - **D1 debug option (temporary diagnostic, not in the contract).** The plugin
   accepts `debug: true` or `debug: "<path>"` and appends one JSONL record per
-  recompute to `/tmp/opencode/subagent-model-debug.jsonl`; the string form
-  overrides the path. It is opt-in: with `debug` absent or `debug: false`
-  nothing is written and the dump path is never touched, so the off-path
-  impact is zero. A write failure is swallowed because it is a diagnostic, not
-  a panel feature, so it cannot reach the R11 toast guard or change a row, and
-  `README.md` documents the option as temporary. Investigation closed: the
-  observed data lives in the §6 sanity fixtures; the option ships for future
-  diagnostics and is planned for removal once unused.
+  recompute; the string form overrides the path. It is opt-in: with `debug`
+  absent or `debug: false` nothing is written and the dump path is never
+  touched, so the off-path impact is zero (R11, D1). A write failure is
+  swallowed because it is a diagnostic, not a panel feature, so it cannot
+  reach the R11 toast guard or change a row. `README.md` documents the option
+  as temporary, and the observed data lives in the §6 sanity fixtures; the
+  option ships for future diagnostics and is planned for removal once unused.
+  **Default path (post-ship security fix, F40):**
+  `$XDG_STATE_HOME/opencode/subagent-model-debug.jsonl`, falling back to
+  `~/.local/state/opencode/subagent-model-debug.jsonl` when `XDG_STATE_HOME`
+  is unset or trims to empty: the XDG spec requires an absolute path, so a
+  whitespace-only value (`"   "`) is treated as unset; a non-empty check would
+  accept it and produce a relative path under the process cwd, the same
+  world-followable hazard this fix removes. Reason: "an audit found
+  `/tmp/opencode` is mode 0755 with umask
+  0022, so the JSONL landed 0644 and any local user could read session IDs,
+  model ids and token counts; a pre-created `/tmp/opencode` (0777) plus a
+  symlink at the file name makes `appendFileSync` follow the link
+  (`fs.protected_symlinks=1` does not apply — the link is not in a sticky
+  directory)." **File hardening rule:** create the directory with
+  `{ recursive: true, mode: 0o700 }` and write with `mode: 0o600`; the
+  explicit `debug: "<path>"` override still chooses the file but keeps the
+  same 0700 directory / 0600 file modes. Both mode values are literals at the
+  write site, not contract numbers. **Size cap:** one module-local constant
+  in `src/tui.tsx`, `DEBUG_MAX_LINES = 2000` records, after which the
+  diagnostic stops appending (silently, same handling as a failed write).
+  Reason: one record per recompute, no rotation, unbounded disk growth. The
+  cap counts records **written by this process** (a `debugLines` counter),
+  never reads the target file, because reading a config-chosen path is the
+  worse hazard — a FIFO blocks `readFileSync`, a huge or device file
+  (`debug: "/dev/zero"`) reads forever, and the off path must not touch the
+  path at all. It is not a C-number and moves no contract.
+  **Boundary fixtures (out of contract, not C/T/G pins):** the path-resolution
+  cases run in the suite — default path with `XDG_STATE_HOME` set (state path
+  wins, no `~` fallback), unset (home fallback chosen), set but empty (treated
+  as unset per the XDG spec, `~/.local/state` fallback; a naive read would join
+  an empty prefix into a relative path), and set to whitespace (`"   "`, also
+  treated as unset for the same reason). The override-mode, size-cap and
+  guard-set prune behaviours live in `src/tui.tsx`, which the pure test file
+  cannot import, so they are implementation checks verified by review or a
+  manual run, not suite fixtures: the override path creates its parent at 0700
+  and the file at 0600, exactly like the default; 1999 and 2000 records written
+  in this process append, a 2001st is not written; an existing file longer than
+  2000 is left untouched (not truncated, not read). On the off path nothing is
+  created or read.
 
 ## 8. Findings for the Project Manager
 
@@ -2683,7 +2732,10 @@ settled (human decision A.5); F20 is obsolete at A.6 (human decision).
 F25–F28 are the new points A.8 surfaces; F29–F30 are the new points A.10
 surfaces; F31–F36 are A.11's points, settled by PM arbitration (F31 by the
 Product amendment to R2); F37 is A.12's ladder-units and rung-1-authority
-reading, settled by PM arbitration; F38 is the post-ship host-module fact. F16, F17, F20, F23 and
+reading, settled by PM arbitration; F38 is the post-ship host-module fact;
+F39 is A.13's budget arithmetic, settled by PM arbitration; F40 is the
+post-ship local-file hardening fix, settled by the PM as a security fix
+rather than a contract change. F16, F17, F20, F23 and
 F24 are listed with their source rather than as requests for an answer.
 
 - **F1 (R5 width domain).** R5 gives no lower bound on `width`. Below 19 cells
@@ -2951,6 +3003,28 @@ F24 are listed with their source rather than as requests for an answer.
   `B = 26`: a 26-cell title fits, 27 and 30 clip to 26 cells). No open
   question remains; the decision's `W − 10` arithmetic and its 14-cell title
   count were corrected in the same round.
+- **F40 (out of contract, post-ship security fix) — settled by the PM as a
+  security fix, not a contract change.** D1's diagnostic wrote one JSONL
+  record per recompute to a fixed `/tmp/opencode` path with default
+  directory/file modes and no size cap, and G16's `syncedSessions` guard set
+  grew for the process life. Quote of the audit reason: "an audit found
+  `/tmp/opencode` is mode 0755 with umask 0022, so the JSONL landed 0644 and
+  any local user could read session IDs, model ids and token counts; a
+  pre-created `/tmp/opencode` (0777) plus a symlink at the file name makes
+  `appendFileSync` follow the link (`fs.protected_symlinks=1` does not apply —
+  the link is not in a sticky directory)." Three defects in one class:
+  world-readable temp file, symlink follow, unbounded growth.
+  **Fix direction (recorded in D1 and the §2 G16 section):**
+  default path moves to `$XDG_STATE_HOME/opencode/subagent-model-debug.jsonl`
+  (`~/.local/state/opencode/subagent-model-debug.jsonl` when `XDG_STATE_HOME`
+  is unset); directory created `{ recursive: true, mode: 0o700 }`, file
+  written `mode: 0o600`; the explicit `debug: "<path>"` override keeps the
+  same modes; `DEBUG_MAX_LINES = 2000` records caps the file; the guard set is
+  pruned after each `readInstances` pass to the ids the host still lists.
+  **Not moved:** `docs/Product.md` has no debug or sync-guard text (R11's
+  off-path rule and R5 are untouched), and every C-, T- and G-number keeps
+  its value and meaning. README's `debug` paragraph remains the PM's to
+  update with the new path.
 
 
 ## 9. Revision notes
@@ -3254,3 +3328,23 @@ F24 are listed with their source rather than as requests for an answer.
   resolution), §6 (intro, C11, C12, C14, C35, C36, C39, C49, one-constant
   bullets, A.13 fixture contract, T6–T14 updates, T26–T31, S4/S6/S11 notes),
   §7 (G22 updated, new G25), and this note.
+- **Post-ship local-file hardening (version 1.3.1, out of contract).** Security
+  fix for the D1 diagnostic and the G16 guard set; F40 records the reason and
+  the PM settlement. **D1:** default dump path moves from
+  `/tmp/opencode/subagent-model-debug.jsonl` to
+  `$XDG_STATE_HOME/opencode/subagent-model-debug.jsonl`, falling back to
+  `~/.local/state/opencode/subagent-model-debug.jsonl` when `XDG_STATE_HOME`
+  is unset; the directory is created `{ recursive: true, mode: 0o700 }` and
+  the file written `mode: 0o600`; the explicit `debug: "<path>"` override
+  keeps the same modes; a module-local `DEBUG_MAX_LINES = 2000` stops
+  appending silently, like a failed write. Off path unchanged (R11, D1):
+  absent or `false` reads and writes nothing. **G16:** `syncedSessions` is
+  pruned after each `readInstances` pass to ids the host still lists
+  (`context.data.session.get(id) === undefined` drops), so a long-running TUI
+  keeps only live sessions; running and grace sessions stay listed, sync once,
+  and a duplicate sync stays harmless but must not become the norm.
+  **Moved:** the D1 bullet in §7, the §2 G16 sync bullets, §8 (new F40 and
+  its intro line), README's `debug` paragraph (PM-owned, to the new path),
+  and this note. **Unchanged:** `docs/Product.md` (no debug or sync-guard
+  text; R5 and R11 keep their wording), every C-number value, every T-number
+  string, every G-number obligation, and the rest of `README.md`.
