@@ -268,7 +268,7 @@ export function collect(sources: Sources, sessionID?: string): RunningSubagent[]
   return rows
 }
 
-/** Speed boxes on every row, filled or empty. */
+/** Speed boxes on instance rows, filled or empty; role rows carry none. */
 export const BAR_CELLS = 5
 
 /** Filled box glyph, one cell advance, flush against its neighbour (C30). */
@@ -298,11 +298,11 @@ export const ROLE_NAME_GAP_CELLS = 1
 /** Hard cap on the role model label text, so a wide sidebar does not stretch it. */
 export const ROLE_MODEL_MAX_CELLS = 20
 
-/** Every role row cell except the model column: number, name, gap, separator, boxes. */
-export const ROLE_FIXED_CELLS = 19
+/** Every role row cell except the model column: number, name, gap (A.14: no separator, no boxes). */
+export const ROLE_FIXED_CELLS = 13
 
-/** C38: role cells outside the proportional split (number, gap, separator, boxes). */
-export const ROLE_REST_FIXED_CELLS = 10
+/** C38: role cells outside the proportional split (number, gap; no separator, no boxes). */
+export const ROLE_REST_FIXED_CELLS = 4
 
 /** C40: the role name's share of the proportional rest, rounded half-up. */
 export const ROLE_NAME_SHARE_NUM = 2
@@ -315,9 +315,6 @@ export const ROLE_NAME_MIN_CELLS = 6
 
 /** C43: lower bound of the proportional role model field. */
 export const ROLE_MODEL_MIN_CELLS = 4
-
-/** One separator cell between the role model field and the first box glyph. */
-export const ROLE_BAR_GAP_CELLS = 1
 
 /** Instance indent: space, tree glyph, space. */
 export const INSTANCE_INDENT_CELLS = 3
@@ -667,7 +664,7 @@ export type FieldSplit = {
   proportional: boolean
 }
 
-/** C48: the role name/model split, or the fallback `9 / (W − 19)` fields. */
+/** C48: the role name/model split, or the fallback `9 / (W − 13)` fields. */
 export function roleSplit(width: number, dynamic: boolean): FieldSplit {
   const W = effectiveWidth(width)
   const rest = W - ROLE_REST_FIXED_CELLS
@@ -701,6 +698,7 @@ export function instanceSplit(width: number, dynamic: boolean): FieldSplit {
  * Role row text: number, agent name, and the model column. A built-in role
  * puts `BUILTIN_TAG_TEXT` in the model column instead of reading a model
  * (A.9, C34, C50). A bound floor or no detection selects the fixed arithmetic.
+ * A role row has no separator and no boxes (A.14), so the head is `W` cells.
  */
 function roleHead(
   index: number,
@@ -718,7 +716,7 @@ function roleHead(
     : model
       ? padCells(fitModel(model, Math.min(fields.model, ROLE_MODEL_MAX_CELLS)), fields.model)
       : " ".repeat(fields.model)
-  return `${number}.${agent}${" ".repeat(ROLE_NAME_GAP_CELLS)}${modelField}${" ".repeat(ROLE_BAR_GAP_CELLS)}`
+  return `${number}.${agent}${" ".repeat(ROLE_NAME_GAP_CELLS)}${modelField}`
 }
 
 /**
@@ -754,9 +752,9 @@ export type PanelRow = {
    * and title, then the model field.
    */
   head: string
-  /** Filled boxes, 0-`BAR_CELLS`. Empty for an idle or grace row. */
-  filled: number
-  /** Speed the fill was derived from. Unknown renders empty boxes. */
+  /** Filled boxes, 0-`BAR_CELLS`. Instance rows only; undefined on a role row (A.14). */
+  filled?: number
+  /** Speed the fill was derived from. Instance rows only; unknown renders empty boxes. */
   tps?: number
   state: RowState
   /** Agent-definition colour, applied while a row is not idle. */
@@ -951,7 +949,6 @@ export function panel(
     agentName: string,
     model: ModelRef | undefined,
     state: RowState,
-    tps: number | undefined,
     color: string | undefined,
     builtin: boolean,
   ) => {
@@ -960,8 +957,6 @@ export function panel(
     const modelText = builtin ? "" : model ? shortLabel(model) : ""
     rows.push({
       head: roleHead(number, agentName, modelText, W, builtin, dynamic),
-      filled: barFill(tps),
-      tps,
       state,
       agentColor: color,
     })
@@ -995,17 +990,10 @@ export function panel(
   for (const section of busy) {
     const active = section.instances.some((one) => one.state === "active")
     const state: RowState = active ? "active" : "grace"
-    const known = section.instances
-      .filter((one) => one.state === "active")
-      .map((one) => instanceTps(one.session.id))
-      .filter((value): value is number => value !== undefined)
-    // The role row carries its busiest active instance's speed, so its boxes
-    // take the same single tone as that instance (G13, R6).
-    const tps = known.length > 0 ? Math.max(...known) : undefined
     sectionsToEmit.push({
       lines: section.instances.length + 1,
       emit: () => {
-        pushRole(section.name, section.model, state, tps, active ? section.color : undefined, section.builtin)
+        pushRole(section.name, section.model, state, active ? section.color : undefined, section.builtin)
         section.instances.forEach((one, index) => {
           pushInstance(
             index === section.instances.length - 1 ? "└" : "├",
@@ -1020,7 +1008,7 @@ export function panel(
   for (const role of idle) {
     sectionsToEmit.push({
       lines: 1,
-      emit: () => pushRole(role.name, role.model, "idle", undefined, role.color, role.builtin),
+      emit: () => pushRole(role.name, role.model, "idle", role.color, role.builtin),
     })
   }
 

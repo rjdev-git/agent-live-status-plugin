@@ -57,7 +57,10 @@ Rows carry:
   capped at 9 cells, clipped with `…`), the agent definition's model as the
   short `Provider/Model` label, an agent with no defined model shows blank
   model cells.
-- Idle state: grey (`theme.text.muted`), empty boxes.
+- Role rows carry no speed bar (human decision A.14): the five box columns
+  and their separator belong to the name and model fields instead, so a role
+  row's text reaches the row's last column.
+- Idle state: grey (`theme.text.muted`).
 - Working state: the colour defined on the agent definition, falling back to
   the theme's success green.
 
@@ -107,8 +110,9 @@ row.
 
 ## R5 — Layout arithmetic
 
-Both row shapes are exactly `width` cells wide; the boxes always occupy the
-last 5 columns, aligned across rows.
+Both row shapes are exactly `width` cells wide. Instance rows end with the
+5 speed boxes in the last five columns; role rows carry no boxes (human
+decision A.14), so the name and model fields use those columns.
 
 - `width` option, default 35 cells.
 - Dynamic width (human decision A.11, upgraded by A.12): the panel derives
@@ -125,25 +129,30 @@ last 5 columns, aligned across rows.
   sidebar closed/transitioning, or the panel not rendered in the side
   region); then the configured `width` governs, floor `MIN_ROW_CELLS` as
   before.
-- Proportional fields (A.11): on a role row the "rest" (width − 3 number − 1
-  gap − 1 separator − 5 boxes) splits between the name field and the model
-  field — name gets 40% rounded, model gets the remainder. On an instance
-  row the same rest splits between the title field and the model field, but
-  the title field stays capped at its 8-cell maximum (any unused title
+- Proportional fields (A.11, A.14): on a role row the "rest" (width − 3
+  number − 1 name gap; no separator and no boxes since A.14) splits between
+  the name field and the model field — name gets 40% rounded, model gets the
+  remainder. On an instance row the rest (width − 3 indent − 1 title gap − 1
+  separator − 5 boxes) splits between the title field and the model field,
+  but the title field stays capped at its 8-cell maximum (any unused title
   cells go to the model field). Name/title floor 6 cells, model field floor
   4 cells; whenever a floor binds (or detection is unavailable), the
   previous fixed-field arithmetic governs instead.
-- Fixed under A.11: the two-digit number (3 cells), both gap/separator
-  cells (1 each), the 5 speed boxes, and the `[built-in]` tag — the tag
-  keeps its fixed 10-cell rendering inside whatever model field the split
-  yields, it is never proportional.
+- Fixed under A.11: the two-digit number (3 cells), the role name gap (1
+  cell), the instance title gap and separator (1 each), the 5 instance speed
+  boxes, and the `[built-in]` tag — the tag keeps its fixed 10-cell
+  rendering inside whatever model field the split yields, it is never
+  proportional. A.14 removes the role's separator and boxes.
 - Model label rule: when `Provider/Model` overflows its field, the provider
   keeps at most half of it, and the model name gets whatever remains; the
   whole label clips to `field - 1` characters plus `…`.
-- Exactly one separator cell sits between the model field and the first
-  box glyph on both row shapes (A.5; between box glyphs there is none).
-- Role field: number 3 + name 9 + space 1 + model (width - 19, capped at 20)
-  + separator 1 + boxes 5. At the default width the model field is 16 cells.
+- Exactly one separator cell sits between the instance model field and the
+  first box glyph; role rows have no separator and no boxes (A.14; between
+  box glyphs there is none).
+- Role field (A.14): number 3 + name + space 1 + model, the two text fields
+  splitting width − 4, with no separator and no boxes. Fallback: name 9,
+  model width − 13, the model capped at 20. At the default width 35 the
+  rest is 31 cells → name 12, model 19.
 - Instance field: indent 3 (space, glyph, space) + title 8 + space 1 + model
   12 + padding to align + separator 1 + boxes 5.
 - `One constant, one meaning`: each field has its own named constant; one
@@ -165,8 +174,8 @@ The 5 boxes show the instance's live output speed, not context usage.
   a new message arrives or on the 1-second ticker. The exact arithmetic
   over the available message timestamps is a design decision and must be
   flagged for arbitration if the data cannot support it.
-- A working role row's box mirrors its busiest active instance's fill; idle
-  roles show empty boxes.
+- Role rows carry no bar (human decision A.14): the boxes, the separator,
+  and the role's derived speed are gone, so speed reads per instance only.
 - Features removed with the context bar: the token-percentage calculation,
   the 50/70 colour bands, and every rule that needed `limit.context`. The
   G16 sync requirement survives untouched — messages still feed the boxes.

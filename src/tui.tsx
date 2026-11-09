@@ -493,8 +493,16 @@ function FullPanel(props: {
                 <>
                   <br />
                   <Seg fg={rowColor(theme, row)}>{row.head}</Seg>
-                  <Seg fg={barColor(theme, row.filled)}>{BAR_GLYPH_FILLED.repeat(row.filled)}</Seg>
-                  <Seg fg={theme.text.muted}>{BAR_GLYPH_EMPTY.repeat(BAR_CELLS - row.filled)}</Seg>
+                  {row.filled === undefined ? undefined : (
+                    <>
+                      <Seg fg={barColor(theme, row.filled)}>
+                        {BAR_GLYPH_FILLED.repeat(row.filled)}
+                      </Seg>
+                      <Seg fg={theme.text.muted}>
+                        {BAR_GLYPH_EMPTY.repeat(BAR_CELLS - row.filled)}
+                      </Seg>
+                    </>
+                  )}
                 </>
               )}
             </For>
