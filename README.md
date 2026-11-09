@@ -1,6 +1,6 @@
 # subagent-live-status-plugin
 
-[![License: MIT](https://img.shields.io/github/license/chatteridiot-git/subagent-live-status-plugin.svg?style=flat-square)](https://github.com/chatteridiot-git/subagent-live-status-plugin/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/github/license/rjdev-git/subagent-live-status-plugin.svg?style=flat-square)](https://github.com/rjdev-git/subagent-live-status-plugin/blob/main/LICENSE)
 
 Live model status for running subagents in the OpenCode TUI.
 
@@ -39,7 +39,7 @@ Project Team Members 1/5
  5.research     Go/Kimi K3.1
 ```
 
-`explore` is a built-in agent working a task in a repo that also has `.opencode/agents` definitions: its role row shows the fixed `[built-in]` tag instead of a model. Its `Inspect…` instance runs a different model, so the model shows; its `Audit r…` instance uses the role's model, so the model cell is omitted. Charter-role rows (`reviewer` and friends) show their definition model instead of the tag.
+`explore` is a built-in agent working a task in a repo that also has `.opencode/agents` definitions: its role row shows the fixed `[built-in]` tag instead of a model. Its `Inspect…` instance run uses the resolved session model.
 
 States:
 
@@ -54,11 +54,11 @@ The title counts roles currently working over roles known. The body caps at 10 l
 +2 more · /subagents
 ```
 
-Role rows are numbered (` 1.`, `20.` reserved), instance rows are unnumbered. Both row shapes fill exactly `width` cells. Only instance rows carry the speed boxes, so they align vertically with each other; a role row has no boxes and its name and model use those columns, reaching the row's last cell.
+Role rows are numbered (` 1.`, `20.` reserved), instance rows are unnumbered. Both row shapes fill exactly `width` cells. Only instance rows carry the speed boxes, so they align vertically with each other.
 
-Row width is measured at runtime, from your terminal itself — no config needed. In priority order: (1) the renderer's own layout tree knows the sidebar container's width in cells (authoritative); (2) if that read is ambiguous, device pixels reported by the terminal are divided by the renderer's cell columns; (3) as a last resort, the host's reported sidebar pixel width divided by 8. The configured `width` stays as the cap and as the fallback when every measurement fails, floored at the same minimum as config mode. A live sidebar resize (or terminal resize) rebuilds the rows on the next render with no state side effects. On the detected path the row fields are proportional: on a role row the space after the number (rest = width − 4) splits between the name and the model — name gets 40% rounded up, model the remainder, floors of 6 and 4 cells; there is no separator and no boxes, so the model ends at the row's last cell. Instance rows split title (capped at 8) and model over their own rest = width − 10 (indent 3, title gap 1, separator 1, boxes 5); the title's unused share cells flow to the model, so at wide widths the model field is width − 18. Titles and names clip with `…` per the usual rules. Detection widens the role name field past the fallback's 9 cells; the label caps still apply on both paths — model 20 cells on a role and 12 on an instance, title 8 cells. When an instance's model cell is omitted (its model equals the role's), the title absorbs the model cell's space instead: it clips only at the full width between the indent and the separator (rest + gap cells = width − 9), on both paths, so long titles read whole where the old fillers wasted text space. Shown-model rows and role rows keep the layout described above. When detection is unavailable (`prompt.footer` placement, sidebar closed, terminal without a pixel report), the configured `width` governs with the fixed fallback field arithmetic: role name 9 cells and model `width − 13`, instance title 8 and model `width − 18`.
+Row width is measured at runtime, from your terminal itself — no config needed. In priority order: (1) the renderer's own layout tree knows the sidebar container's width in cells (authoritative), (2) terminal pixel width and cell metrics estimate the width, and (3) the configured fallback width is used.
 
-The model label clips when the row is too tight: the provider keeps at most half of the budget, and the model name takes the rest. On an instance row one separator cell sits between the model column and the boxes; the boxes are tight against each other. Role rows have no boxes and no separator. Boxes show throughput in bands: one box at 5–19.9 tokens/sec, two at 20–49.9, three at 50–69.9, four at 70–100, and five above 100 (strictly greater — 100.0 exactly stays in the four-box band); speeds below 5 fill none. Filled boxes are always green, empty boxes are muted, and an unknown speed is five muted empty boxes.
+The model label clips when the row is too tight: the provider keeps at most half of the budget, and the model name takes the rest. On an instance row one separator cell sits between the model columns.
 
 **How to read the boxes.** The boxes show an instance's measured output speed; each filled box is a step up in real speed, not a proportional fraction.
 
@@ -92,9 +92,9 @@ sub 3
 
 ## How it works
 
-Which agents the panel shows is decided once per session as a snapshot: with at least one agent definition in `.opencode/agents` (charter mode) it lists only those definitions (skipping agents marked `hidden` and primary agents), and built-in agents appear only as temporary rows while one of their sessions is running in this tab — a failed or interrupted one keeps its row for the 30-second grace window, then the row disappears with it. Without any `.opencode/agents` definition the panel falls back to listing the host's built-in agents, again skipping `hidden` and primary agents. Mid-session changes to `.opencode/agents` take effect on the next session, not the running one.
+Which agents the panel shows is decided once per session as a snapshot: with at least one agent definition in `.opencode/agents` (charter mode) it lists only those definitions (skipping agents marked `hidden: true`). Without definitions, it falls back to all discovered agents except `hidden: true`.
 
-A session becomes an instance row when it is a child session currently marked `running`, and it belongs to the tab the viewer is in. A session that ended with `outcome: failed` or `interrupted` stays visible for a 30-second grace window before collapsing back into its role row.
+A session becomes an instance row when it is a child session currently marked `running`, and it belongs to the tab the viewer is in. A session that ended with `outcome: failed` or `interrupted` stays visible in warning colour for 30 seconds, then disappears.
 
 The title counts how many roles have a working instance.
 
@@ -105,15 +105,15 @@ It resolves the instance model in this order:
 3. the nearest parent session model
 4. `unknown model`
 
-So an instance may resolve a model different from its role's `agent.md` — a per-session override wins. The panel shows the instance's model label only when it carries information: when the resolved model differs from the role's own resolved model, or when the instance's model is unknown. When the labels agree, the model cell is omitted and the row keeps its geometry. A built-in role row never shows a model — it shows the `[built-in]` tag — and its instances keep showing their model (when it carries information, per A.10).
+So an instance may resolve a model different from its role's `agent.md` — a per-session override wins. The panel shows the instance's model label only when it carries information: when the resolved model differs from the role's configured model.
 
 The displayed label follows the format `ProviderName/ModelName`, and appends ` (variant)` when relevant. If a label is missing, the plugin falls back to the provider or model ID.
 
 The sidebar rows use the short form: the provider's last word (`OpenCode Go` → `Go`) and no variant.
 
-The speed bar is computed from the instance's own assistant messages: output tokens divided by the time they streamed, so it reports tokens per second. The five boxes fill in bands: 1 box at 5–19.9 tokens/sec, 2 at 20–49.9, 3 at 50–69.9, 4 at 70–100, 5 above 100 (strictly greater), none below 5. Cumulative session tokens are not used, and a message without both stream timings is skipped, so a session with no measurable message keeps five muted empty boxes instead of a guessed number. Role rows carry no boxes: speed reads per running instance only.
+The speed bar is computed from the instance's own assistant messages: output tokens divided by the time they streamed, so it reports tokens per second. The five boxes fill in bands: 1 box at 5–19.9 tokens/sec, 2 at 20–49.9, 3 at 50–69.9, 4 at 70–100, and 5 above 100. Below 5, all boxes are empty.
 
-The plugin syncs each running subagent session (session and messages) into the TUI data layer when the session appears on the panel or when its execution starts, then re-syncs the session's messages whenever one of its assistant steps ends (or a content update arrives), so the speed bar tracks tokens/sec live. A step end is the trigger the plugin relies on: it carries the final token count for the step. A sync failure surfaces as a host toast, and the affected row shows what is loaded.
+The plugin syncs each running subagent session (session and messages) into the TUI data layer when the session appears on the panel or when its execution starts, then re-syncs the session's messages as new assistant output arrives.
 
 ## Commands
 
@@ -224,7 +224,6 @@ src/tui.tsx              TUI commands, slots, and dialogs
 src/lib/collect.ts       model resolution, role tree, and layout logic
 src/lib/collect.test.ts  unit tests for the data layer
 
-```text
 docs/superpowers/specs/  design documents
 ```
 
