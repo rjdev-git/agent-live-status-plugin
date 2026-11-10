@@ -8,7 +8,7 @@ This plugin shows which model each active subagent is using, so you can quickly 
 
 It is especially useful when you use different models for your main agent and subagents and want to confirm that each subagent is using the intended model from its configuration.
 
-Current version: `1.4.4`
+Current version: `1.4.5`
 
 Project renamed to `subagent-live-status-plugin` (was `opencode-subagent-model`); plugin id, storage namespace, and command ids move with it — the persisted compact toggle resets once.
 
@@ -146,7 +146,7 @@ Example:
 
 ## Configuration
 
-Add the plugin in `opencode.jsonc`:
+Add the plugin in `opencode.json` (or `opencode.jsonc` if you prefer JSON with comments):
 
 ```jsonc
 {
@@ -187,7 +187,7 @@ planned for removal once it goes unused.
 
 ### Install from npm (easiest)
 
-This is what most people need. Add the plugin to `opencode.jsonc` — no clone, no build, no `node_modules`:
+This is what most people need. Add the plugin to `opencode.json` (or `opencode.jsonc`) — no clone, no build, no `node_modules`:
 
 ```jsonc
 {
