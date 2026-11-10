@@ -57,7 +57,7 @@ The title counts roles currently working over roles known. The body caps at 10 l
 
 Role rows are numbered (` 1.`, `20.` reserved), instance rows are unnumbered. Both row shapes fill exactly `width` cells. Only instance rows carry the speed boxes, so they align vertically with each other.
 
-Row width is measured at runtime from your terminal itself, no config needed. In priority order: (1) the renderer's own layout tree knows the sidebar container's width in cells (authoritative), (2) the TUI pane width after layout, (3) the configured `width`, then (4) a fallback estimate.
+Row width is measured at runtime from your terminal itself, no config needed. In priority order: (1) the renderer's own layout tree knows the sidebar container's width in cells (authoritative), (2) terminal pixel width and cell metrics estimate the width, and (3) the plugin uses the configured fallback width.
 
 The model label clips when the row is too tight: the provider keeps at most half of the budget, and the model name takes the rest. On an instance row one separator cell sits between the model field and the speed bar.
 
@@ -93,9 +93,9 @@ sub 3
 
 ## How it works
 
-Which agents the panel shows is decided once per session as a snapshot: with at least one agent definition in `.opencode/agents` (charter mode) it lists only those definitions (skipping agents marked hidden); otherwise it falls back to currently running sessions under the active tab.
+Which agents the panel shows is decided once per session as a snapshot: with at least one agent definition in `.opencode/agents` (charter mode) it lists only those definitions (skipping agents marked `hidden: true` or `primary`), and built-in agents appear only as temporary rows while one of their sessions runs in this tab. Without definitions, it falls back to all discovered agents except `hidden: true` and `primary`. Mid-session changes to `.opencode/agents` take effect on the next session, not the running one.
 
-A session becomes an instance row when it is a child session currently marked `running`, and it belongs to the tab the viewer is in. A session that ended with `outcome: failed` or `interrupted` still lingers for a short time, but folds away after the grace period.
+A session becomes an instance row when it is a child session currently marked `running`, and it belongs to the tab the viewer is in. A session that ended with `outcome: failed` or `interrupted` stays visible in warning colour for 30 seconds, then folds back into its role row; when the role existed only as a temporary built-in row for that session, the row disappears with it.
 
 The title counts how many roles have a working instance.
 
@@ -106,7 +106,7 @@ It resolves the instance model in this order:
 3. the nearest parent session model
 4. `unknown model`
 
-So an instance may resolve a model different from its role's `agent.md`: a per-session override wins. The panel shows the instance's model label only when it carries information: when the resolved model is known and differs from the role model, or when the role itself is unmodelled and the instance has a model worth showing.
+So an instance may resolve a model different from its role's `agent.md`: a per-session override wins. The panel shows the instance's model label only when it carries information: when the resolved model differs from the role's model, or when the instance's model is unknown.
 
 The displayed label follows the format `ProviderName/ModelName`, and appends ` (variant)` when relevant. If a label is missing, the plugin falls back to the provider or model ID.
 
