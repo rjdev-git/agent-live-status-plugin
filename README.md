@@ -8,7 +8,7 @@ This plugin shows which model each active subagent is using, so you can quickly 
 
 It is especially useful when you use different models for your main agent and subagents and want to confirm that each subagent is using the intended model from its configuration.
 
-Current version: `1.4.1`
+Current version: `1.4.2`
 
 Project renamed to `subagent-live-status-plugin` (was `opencode-subagent-model`); plugin id, storage namespace, and command ids move with it — the persisted compact toggle resets once.
 
@@ -185,6 +185,27 @@ planned for removal once it goes unused.
 
 ## Installation
 
+### First install
+
+```sh
+git clone https://github.com/rjdev-git/subagent-live-status-plugin.git
+cd subagent-live-status-plugin
+npm install
+mkdir -p ~/.config/opencode/plugins
+ln -s "$PWD" ~/.config/opencode/plugins/subagent-live-status-plugin
+```
+
+### Update
+
+```sh
+git pull
+npm install        # only when package-lock.json changed
+```
+
+After either step, reload the TUI with `/reload` or restart OpenCode.
+
+### Alternative installs
+
 The plugin is discovered from the OpenCode plugin directories.
 
 Global config path:
@@ -205,7 +226,7 @@ You can also symlink the plugin directory into place:
 ln -s /path/to/subagent-live-status-plugin ~/.config/opencode/plugins/subagent-live-status-plugin
 ```
 
-After installation, reload the TUI with `/reload` or restart OpenCode.
+Copy the directory instead of symlinking also works; updates then need a re-copy.
 
 ## Development
 
