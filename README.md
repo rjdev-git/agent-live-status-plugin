@@ -2,15 +2,15 @@
 
 [![License: MIT](https://img.shields.io/github/license/rjdev-git/subagent-live-status-plugin.svg?style=flat-square)](https://github.com/rjdev-git/subagent-live-status-plugin/blob/main/LICENSE)
 
-Live model status for running subagents in the OpenCode TUI.
+Live model status for running subagents in the OpenCode TUI (terminal UI).
 
-This plugin shows which model each active subagent is using, so you can quickly understand what is running without opening each session individually.
+This plugin shows which model each active subagent is using, so you can see what is running without opening each session individually.
 
-It is especially useful when you use different models for your main agent and subagents and want to confirm that each subagent is using the intended model from its configuration.
+It matters when subagents use models different from your main agent: the panel shows each subagent's model, so you can confirm it matches its configuration.
 
-Current version: `1.4.5`
+Current version: `1.4.6`
 
-Project renamed to `subagent-live-status-plugin` (was `opencode-subagent-model`); plugin id, storage namespace, and command ids move with it — the persisted compact toggle resets once.
+The project was renamed from `opencode-subagent-model` to `subagent-live-status-plugin`; the plugin id, storage namespace, and command ids move with it, so the persisted compact toggle resets once.
 
 ## Live preview
 
@@ -56,7 +56,7 @@ The title counts roles currently working over roles known. The body caps at 10 l
 
 Role rows are numbered (` 1.`, `20.` reserved), instance rows are unnumbered. Both row shapes fill exactly `width` cells. Only instance rows carry the speed boxes, so they align vertically with each other.
 
-Row width is measured at runtime, from your terminal itself — no config needed. In priority order: (1) the renderer's own layout tree knows the sidebar container's width in cells (authoritative), (2) terminal pixel width and cell metrics estimate the width, and (3) the configured fallback width is used.
+Row width is measured at runtime from your terminal itself, no config needed. In priority order: (1) the renderer's own layout tree knows the sidebar container's width in cells (authoritative), (2) terminal pixel width and cell metrics estimate the width, and (3) the plugin uses the configured fallback width.
 
 The model label clips when the row is too tight: the provider keeps at most half of the budget, and the model name takes the rest. On an instance row one separator cell sits between the model field and the boxes; the boxes are tight against each other, and role rows have neither.
 
@@ -105,7 +105,7 @@ It resolves the instance model in this order:
 3. the nearest parent session model
 4. `unknown model`
 
-So an instance may resolve a model different from its role's `agent.md` — a per-session override wins. The panel shows the instance's model label only when it carries information: when the resolved model differs from the role's model, or when the instance's model is unknown.
+So an instance may resolve a model different from its role's `agent.md`: a per-session override wins. The panel shows the instance's model label only when it carries information: when the resolved model differs from the role's model, or when the instance's model is unknown.
 
 The displayed label follows the format `ProviderName/ModelName`, and appends ` (variant)` when relevant. If a label is missing, the plugin falls back to the provider or model ID.
 
@@ -172,7 +172,7 @@ Add the plugin in `opencode.json` (or `opencode.jsonc` if you prefer JSON with c
 | `bind` | `string` | unset | Keybind for the subagent picker |
 | `compact` | `boolean` | unset | Forces compact mode (`sub N`) |
 | `width` | `number` | `35` | Cell budget for a sidebar row; also the cap when width detection succeeds, and the fallback everywhere detection is unavailable |
-| `cellPx` | `number` | `8` | Pixels-per-cell assumption for the LAST measurement rung only (when the terminal reports no pixel resolution); runtime measurement makes this moot on modern terminals |
+| `cellPx` | `number` | `8` | Pixels-per-cell assumption for the last measurement rung only (when the terminal reports no pixel resolution); runtime measurement handles modern terminals |
 
 The `debug` option ships as a diagnostic aid for future investigations:
 `debug: true` enables it and appends a JSONL record per recompute to
@@ -185,9 +185,9 @@ planned for removal once it goes unused.
 
 ## Installation
 
-### Install from npm (easiest)
+### Install from npm (one config line)
 
-This is what most people need. Add the plugin to `opencode.json` (or `opencode.jsonc`) — no clone, no build, no `node_modules`:
+Use this unless you want to modify the plugin. Add the plugin to `opencode.json` (or `opencode.jsonc`) with one config line: no clone, no build, no `node_modules`:
 
 ```jsonc
 {
@@ -205,13 +205,13 @@ This is what most people need. Add the plugin to `opencode.json` (or `opencode.j
 }
 ```
 
-OpenCode fetches the package itself. Updates land the same way: when a new version is published, reload the TUI.
+OpenCode fetches the package itself. When a newer version appears on npm, `/reload` picks it up.
 
 ### Install from source
 
-For people who want to modify the plugin, run its tests, or cannot use npm fetching. Consumers do not need this path.
+Use this when you want to modify the plugin, run its tests, or cannot fetch from npm. Otherwise skip it.
 
-```
+```sh
 git clone https://github.com/rjdev-git/subagent-live-status-plugin.git
 cd subagent-live-status-plugin
 npm install
@@ -221,14 +221,14 @@ ln -s "$PWD" ~/.config/opencode/plugins/subagent-live-status-plugin
 
 ### Update (source install only)
 
-npm installs do not update this way — they pick up the newly published version on `/reload`.
+npm installs do not update this way; they pick up the newly published version on `/reload`.
 
 ```sh
 git pull
 npm install        # only when package-lock.json changed
 ```
 
-After either step, reload the TUI with `/reload` or restart OpenCode.
+After installing or updating, reload the TUI with `/reload` or restart OpenCode.
 
 ### Alternative installs
 
